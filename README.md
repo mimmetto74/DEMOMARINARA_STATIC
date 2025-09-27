@@ -1,8 +1,9 @@
-# ☀️ Solar Forecast - ROBOTRONIX for IMEPOWER
+# ☀️ Solar Forecast - ROBOTRONIX for IMEPOWER (Open-Meteo edition)
 
 - Training: sempre su Dataset_Daily_EnergiaSeparata_2020_2025.csv
-- Previsioni: Ieri, Oggi, Domani, Dopodomani con Meteomatics (`direct_rad:W` + `total_cloud_cover:p`) e fallback Open-Meteo
-- Output: 4 grafici separati (uno per giorno) + metriche kWh
+- Previsioni: Open-Meteo con **shortwave_radiation** e **cloudcover**
+- Formula: G_eff = shortwave_radiation * (1 - cloudcover/100)
+- Output: 4 grafici separati (Ieri, Oggi, Domani, Dopodomani) + download CSV
 - Login: FVMANAGER / MIMMOFABIO
 
 Dataset status in this ZIP: included_real.
