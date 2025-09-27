@@ -5,9 +5,8 @@ import numpy as np
 import requests
 import joblib
 import os
-from datetime import date, timedelta, datetime, timezone
+from datetime import date, timedelta
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, r2_score
 from requests.auth import HTTPBasicAuth
 
 APP_TITLE = "☀️ Solar Forecast - ROBOTRONIX for IMEPOWER"
@@ -112,32 +111,26 @@ st.success("✅ Modello addestrato sul dataset storico")
 st.header("📊 Storico")
 st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh","G_M0_Wm2"]])
 
-st.header("🔮 Previsioni Domani + Dopodomani (Meteomatics con fallback)")
+st.header("🔮 Previsioni Ieri + Oggi + Domani + Dopodomani")
 lat = st.number_input("Latitudine", value=DEFAULT_LAT, format="%.6f")
 lon = st.number_input("Longitudine", value=DEFAULT_LON, format="%.6f")
 
 if st.button("Calcola previsioni"):
+    days = {"Ieri": -1, "Oggi": 0, "Domani": 1, "Dopodomani": 2}
     results = {}
-    for days_ahead in [1,2]:
-        d = date.today()+timedelta(days=days_ahead)
+
+    for label, offset in days.items():
+        d = date.today()+timedelta(days=offset)
         try:
             df15 = get_meteomatics(lat,lon,d)
-            st.success(f"✅ Meteomatics usato per {d}")
-        except Exception as e:
-            st.warning(f"⚠️ Meteomatics non disponibile per {d}, uso Open-Meteo")
+            st.success(f"✅ Meteomatics usato per {label} ({d})")
+        except Exception:
+            st.warning(f"⚠️ Meteomatics non disponibile per {label} ({d}), uso Open-Meteo")
             df15 = get_openmeteo(lat,lon,d)
         kwh, curve = predict_from_curve(model, df15)
-        results[d] = (kwh,curve)
+        results[label] = (d, kwh, curve)
 
-    cols = st.columns(2)
-    for i,d in enumerate(results.keys()):
-        cols[i].metric(f"Produzione {d}", f"{results[d][0]:.1f} kWh")
-    df_plot = pd.DataFrame({d.isoformat():results[d][1] for d in results})
-    st.line_chart(df_plot)
-    # Download CSV
-    out = pd.DataFrame({"Datetime":[], "kWh_15min":[], "Day":[]})
-    for d in results:
-        curve = results[d][1]
-        out = pd.concat([out, pd.DataFrame({"Datetime":curve.index,"kWh_15min":curve.values,"Day":d})])
-    st.download_button("⬇️ Scarica curva 15-min (CSV)", out.to_csv(index=False).encode("utf-8"),
-                       file_name="forecast_robotronix.csv", mime="text/csv")
+    for label in results:
+        st.metric(f"Produzione {label} ({results[label][0]})", f"{results[label][1]:.1f} kWh")
+        st.subheader(f"📈 Curva 15-min prevista per {label} ({results[label][0]})")
+        st.line_chart(results[label][2])
