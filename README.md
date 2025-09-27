@@ -1,15 +1,8 @@
-# 🌞 Solar Forecast - ROBOTRONIX for IMEPOWER
+# ☀️ Solar Forecast - ROBOTRONIX for IMEPOWER
 
-Demo di previsione fotovoltaica basata su:
-- Dati storici (CSV)
-- Modello lineare (scikit-learn)
-- Previsioni Meteomatics (radiazione + nuvolosità)
+- Training: sempre su **Dataset_Daily_EnergiaSeparata_2020_2025.csv**
+- Previsioni: prova **Meteomatics** (solar_rad + cloud_cover); se fallisce → **Open-Meteo** (fallback)
+- Output: curve previste **15-min** per **domani** e **dopodomani**
+- Login: **FVMANAGER / MIMMOFABIO**
 
-## Login
-- **Username**: FVMANAGER
-- **Password**: MIMMOFABIO
-
-## Deploy su Railway
-1. Caricare tutti i file in una repo GitHub
-2. Collegare la repo a Railway
-3. Deploy automatico con Procfile
+Dataset status in this ZIP: placeholder_created.
