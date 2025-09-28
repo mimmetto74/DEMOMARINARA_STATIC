@@ -1,18 +1,13 @@
-# ☀️ Solar Forecast - ROBOTRONIX for IMEPOWER
+# Solar Forecast - ROBOTRONIX for IMEPOWER
 
-Questa applicazione prevede la produzione giornaliera di un impianto fotovoltaico:
-
-- Addestramento modello su dati storici (`Dataset_Daily_EnergiaSeparata_2020_2025.csv`).
-- Previsioni per Ieri, Oggi, Domani, Dopodomani.
-- Meteomatics come fonte principale, con fallback automatico a Open-Meteo.
-- Log CSV delle previsioni scaricabile.
+Questa demo mostra:
+- Addestramento modello su dati storici (CSV incluso)
+- Previsioni FV (ieri, oggi, domani, dopodomani)
+- Meteomatics con fallback su Open-Meteo
+- Log esportabile in formato CSV
 
 ## Deploy su Railway
 ```bash
-git init
-git add .
-git commit -m "Deploy ROBOTRONIX package"
-git branch -M main
-git remote add origin <repo_url>
-git push -u origin main
+pip install -r requirements.txt
+streamlit run pv_forecast_all_in_one.py
 ```
