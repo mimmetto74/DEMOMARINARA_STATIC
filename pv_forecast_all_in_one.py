@@ -10,6 +10,26 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 
 # =========================
+# Login semplice
+# =========================
+st.set_page_config(page_title="Solar Forecast – ROBOTRONIX", layout="wide")
+
+if "auth" not in st.session_state:
+    st.session_state["auth"] = False
+
+if not st.session_state["auth"]:
+    st.title("🔐 Accesso richiesto")
+    user = st.text_input("Username")
+    pw = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if user == "FVMANAGER" and pw == "MIMMOFABIO":
+            st.session_state["auth"] = True
+            st.experimental_rerun()
+        else:
+            st.error("Credenziali non valide.")
+    st.stop()
+
+# =========================
 # Config & Paths
 # =========================
 DATA_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
@@ -19,9 +39,7 @@ LOG_PATH = "forecast_log.csv"
 DEFAULT_LAT = 40.643278
 DEFAULT_LON = 16.986083
 
-# =========================
-# Meteomatics credentials (trial)
-# =========================
+# Meteomatics creds
 MM_USER = "teseospa-eiffageenergiesystemesitaly_daniello_fabio"
 MM_PASS = "6S8KTHPbrUlp6523T9Xd"
 
@@ -79,8 +97,8 @@ def load_model():
 # =========================
 # Providers
 # =========================
+@st.cache_data(ttl=3600)
 def fetch_meteomatics(lat, lon, start_iso, end_iso):
-    # Use direct_rad:W + total_cloud_cover:p (percentuale)
     url = f"https://api.meteomatics.com/{start_iso}--{end_iso}:PT1H/direct_rad:W,total_cloud_cover:p/{lat},{lon}/json"
     r = requests.get(url, auth=(MM_USER, MM_PASS), timeout=25)
     r.raise_for_status()
@@ -88,7 +106,6 @@ def fetch_meteomatics(lat, lon, start_iso, end_iso):
     frames = []
     for blk in j.get("data", []):
         prm = blk.get("parameter")
-        # rename safe names
         if prm == "direct_rad:W": prm = "DirectRad_W"
         if prm == "total_cloud_cover:p": prm = "CloudCover_P"
         for d in blk["coordinates"][0]["dates"]:
@@ -103,7 +120,6 @@ def fetch_meteomatics(lat, lon, start_iso, end_iso):
     return url, df
 
 def fetch_openmeteo(lat, lon, start_date, end_date):
-    # Open‑Meteo daily range; returns hourly direct_radiation & cloudcover
     url = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
            f"&hourly=direct_radiation,cloudcover&start_date={start_date}&end_date={end_date}")
     r = requests.get(url, timeout=25)
@@ -126,7 +142,6 @@ def compute_curve_and_daily(df, model):
     df = df.copy()
     df["time"] = pd.to_datetime(df["time"])
     df = df.sort_values("time")
-    # Rad corretta per copertura nuvolosa
     df["rad_corr"] = df["DirectRad_W"].fillna(0) * (1 - df["CloudCover_P"].fillna(0)/100.0)
     sum_rad = df["rad_corr"].sum()
     pred_kwh = float(model.predict([[sum_rad]])[0]) if sum_rad > 0 else 0.0
@@ -166,7 +181,6 @@ def forecast_for_day(lat, lon, offset_days, label, model):
 # =========================
 # UI
 # =========================
-st.set_page_config(page_title="Solar Forecast – ROBOTRONIX", layout="wide")
 st.title("☀️ Solar Forecast - ROBOTRONIX for IMEPOWER")
 
 # Sidebar: Log download/filter
@@ -212,6 +226,7 @@ with tab3:
     go = st.button("Calcola previsioni (Ieri + Oggi + Domani + Dopodomani)")
     model = load_model()
 
+    results = {}
     containers = {
         "Ieri": st.container(),
         "Oggi": st.container(),
@@ -224,6 +239,7 @@ with tab3:
             with containers[label]:
                 st.markdown(f"### {label}")
                 dfp, pred, provider, status, url = forecast_for_day(lat, lon, off, label, model)
+                results[label] = dfp
                 st.caption(f"Provider: **{provider}** | Stato: **{status}**")
                 if url:
                     st.code(url, language="text")
@@ -234,4 +250,17 @@ with tab3:
                     chart_df = dfp.set_index("time")[["kWh_curve"]].rename(columns={"kWh_curve":"Produzione stimata (kWh/h)"})
                     st.line_chart(chart_df)
 
-# end
+        # Grafico comparativo
+        st.subheader("📊 Confronto curve previste (4 giorni)")
+        comp = pd.DataFrame()
+        for lbl, dfp in results.items():
+            if dfp is not None and not dfp.empty:
+                tmp = dfp[["time","kWh_curve"]].copy()
+                tmp = tmp.rename(columns={"kWh_curve": lbl})
+                if comp.empty:
+                    comp = tmp
+                else:
+                    comp = pd.merge(comp, tmp, on="time", how="outer")
+        if not comp.empty:
+            comp = comp.set_index("time")
+            st.line_chart(comp)

@@ -1,9 +1,11 @@
 # Solar Forecast – ROBOTRONIX (Railway Ready)
 
-Questa app Streamlit:
-- Addestra un modello lineare su dati storici (`Dataset_Daily_EnergiaSeparata_2020_2025.csv`)
-- Calcola previsioni per **Ieri, Oggi, Domani, Dopodomani** usando **Meteomatics** (fallback **Open‑Meteo**)
-- Mostra 4 grafici separati e salva un log CSV scaricabile dalla sidebar.
+Questa app Streamlit include:
+- Login con credenziali (FVMANAGER / MIMMOFABIO)
+- Addestramento modello dai dati storici (CSV incluso)
+- Previsioni 4 giorni (ieri, oggi, domani, dopodomani) con **Meteomatics** (fallback Open‑Meteo)
+- Grafici singoli + comparativo
+- Log CSV scaricabile dalla sidebar
 
 ## Avvio locale
 ```bash
