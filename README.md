@@ -1,17 +1,19 @@
+# ⚡ Solar Forecast - ROBOTRONIX
 
-# Solar Forecast – ROBOTRONIX (Railway ready)
+Questa app Streamlit permette di:
+- Visualizzare previsioni solari (mock demo).
+- Salvare i log in CSV (`log_forecast.csv`).
+- Scaricare i log selezionati (ieri, oggi, domani, dopodomani).
 
-- Modello lineare addestrato su dataset storico (G_M0_Wm2 → E_INT_Daily_kWh)
-- Previsioni per Ieri/Oggi/Domani/Dopodomani con **Meteomatics** (fallback **Open‑Meteo**)
-- 4 grafici separati (curva 15 min/ora prevista)
-- **Log CSV** con URL, provider, esito e produzione stimata
-- **Sidebar** per scaricare il log filtrato (Tutti / Meteomatics / Open‑Meteo / Errori)
+## 🚀 Deploy su Railway
+1. Carica questa cartella su GitHub.
+2. Connetti la repo a Railway.
+3. Verrà avviato automaticamente Streamlit.
 
-## Deploy
-1. Carica questi file in una repo GitHub
-2. Collega la repo a Railway → Deploy
-3. Porta esposta: gestita da Procfile (`$PORT`)
-
-Credenziali Meteomatics da impostare nel codice o tramite Variabili d'Ambiente:
-- `MM_USER`
-- `MM_PASS`
+## 📂 File inclusi
+- `pv_forecast_all_in_one.py` → Script principale
+- `requirements.txt` → Librerie richieste
+- `Procfile` → Configurazione per avvio su Railway
+- `runtime.txt` → Versione Python
+- `.streamlit/config.toml` → Config server
+- `README.md` → Documentazione
