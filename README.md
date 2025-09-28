@@ -1,13 +1,17 @@
-# Solar Forecast - ROBOTRONIX for IMEPOWER
 
-Questa demo mostra:
-- Addestramento modello su dati storici (CSV incluso)
-- Previsioni FV (ieri, oggi, domani, dopodomani)
-- Meteomatics con fallback su Open-Meteo
-- Log esportabile in formato CSV
+# Solar Forecast – ROBOTRONIX (Railway ready)
 
-## Deploy su Railway
-```bash
-pip install -r requirements.txt
-streamlit run pv_forecast_all_in_one.py
-```
+- Modello lineare addestrato su dataset storico (G_M0_Wm2 → E_INT_Daily_kWh)
+- Previsioni per Ieri/Oggi/Domani/Dopodomani con **Meteomatics** (fallback **Open‑Meteo**)
+- 4 grafici separati (curva 15 min/ora prevista)
+- **Log CSV** con URL, provider, esito e produzione stimata
+- **Sidebar** per scaricare il log filtrato (Tutti / Meteomatics / Open‑Meteo / Errori)
+
+## Deploy
+1. Carica questi file in una repo GitHub
+2. Collega la repo a Railway → Deploy
+3. Porta esposta: gestita da Procfile (`$PORT`)
+
+Credenziali Meteomatics da impostare nel codice o tramite Variabili d'Ambiente:
+- `MM_USER`
+- `MM_PASS`
