@@ -1,98 +1,50 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
 import requests
-from sklearn.linear_model import LinearRegression
 from datetime import datetime, timedelta
 
-# ==================
-# Config login
-# ==================
-USER = "FVMANAGER"
-PASS = "MIMMOFABIO"
+# ============================
+# Credenziali Meteomatics (trial)
+# ============================
+MM_USER = "teseospa-eiffageenergiesystemesitaly_daniello_fabio"
+MM_PASS = "6S8KTHPbrUlp6523T9Xd"
 
-# ==================
-# Dataset storico
-# ==================
-DATA_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
+# ============================
+# Funzione per chiamata Meteomatics
+# ============================
+def get_meteomatics_forecast(lat, lon, start, end):
+    url = (
+        f"https://api.meteomatics.com/{start}--{end}:PT1H/"
+        f"global_rad:W,total_cloud_cover:p/{lat},{lon}/json"
+    )
+    resp = requests.get(url, auth=(MM_USER, MM_PASS), timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    df = pd.DataFrame()
+    for param in data["data"]:
+        name = param["parameter"]
+        df[name] = [float(e["value"]) for e in param["coordinates"][0]["dates"]]
+    df["time"] = [e["date"] for e in data["data"][0]["coordinates"][0]["dates"]]
+    df["time"] = pd.to_datetime(df["time"])
+    return df
 
-# ==================
-# Meteomatics API
-# ==================
-MET_USER = "teseospa-eiffageenergiesystemesitaly_daniello_fabio"
-MET_PASS = "6S8KTHPbrUlp6523T9Xd"
-
-# ==================
-# Funzioni
-# ==================
-def check_login():
-    st.title("🔐 Accesso richiesto")
-    user = st.text_input("Username")
-    pw = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if user == USER and pw == PASS:
-            st.session_state["auth"] = True
-        else:
-            st.error("❌ Credenziali non valide")
-            st.stop()
-
-def train_model():
-    df = pd.read_csv(DATA_PATH, parse_dates=["Date"])
-    df = df.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
-    X = df[["G_M0_Wm2"]]
-    y = df["E_INT_Daily_kWh"]
-    model = LinearRegression()
-    model.fit(X, y)
-    joblib.dump(model, "pv_model.joblib")
-    return model, df
-
-def get_meteomatics_forecast(lat, lon):
-    base_url = "https://api.meteomatics.com"
-    start = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
-    end   = (datetime.utcnow() + timedelta(days=2)).strftime("%Y-%m-%dT23:59:00Z")
-    params = "global_rad:W,m cloud_cover:octas"
-    url = f"{base_url}/{start}--{end}:PT24H/{params}/{lat},{lon}/json"
-    r = requests.get(url, auth=(MET_USER, MET_PASS))
-    r.raise_for_status()
-    data = r.json()
-    rad = [float(v["value"]) for v in data["data"][0]["coordinates"][0]["dates"]]
-    cloud = [float(v["value"]) for v in data["data"][1]["coordinates"][0]["dates"]]
-    dates = [v["date"] for v in data["data"][0]["coordinates"][0]["dates"]]
-    return pd.DataFrame({"Date": pd.to_datetime(dates), "G_M0_Wm2": rad, "CloudCover": cloud})
-
-def predict_production(model, df_forecast):
-    X_future = df_forecast[["G_M0_Wm2"]]
-    y_pred = model.predict(X_future)
-    df_forecast["E_INT_Pred_kWh"] = y_pred
-    return df_forecast
-
-# ==================
-# UI principale
-# ==================
-if "auth" not in st.session_state:
-    st.session_state["auth"] = False
-
-if not st.session_state["auth"]:
-    check_login()
-    st.stop()
-
+# ============================
+# Interfaccia Streamlit
+# ============================
 st.title("☀️ Solar Forecast - ROBOTRONIX for IMEPOWER")
 
-# Training
-st.header("📊 Analisi Storica & Training")
-model, df_hist = train_model()
-st.success("✅ Modello addestrato con dati storici")
-
-st.line_chart(df_hist.set_index("Date")[["E_INT_Daily_kWh", "G_M0_Wm2"]])
-
-# Forecast
-st.header("🔮 Previsioni Meteomatics (Domani + Dopodomani)")
-lat = st.number_input("Latitudine", value=40.643278)
-lon = st.number_input("Longitudine", value=16.986083)
+lat = st.number_input("Latitudine", value=40.643278, format="%.6f")
+lon = st.number_input("Longitudine", value=16.986083, format="%.6f")
 
 if st.button("Genera Previsione"):
-    df_forecast = get_meteomatics_forecast(lat, lon)
-    df_pred = predict_production(model, df_forecast)
-    st.write(df_pred[["Date", "E_INT_Pred_kWh", "CloudCover"]])
-    st.line_chart(df_pred.set_index("Date")[["E_INT_Pred_kWh", "G_M0_Wm2"]])
+    today = datetime.utcnow().date()
+    start = f"{today}T00:00:00Z"
+    end = f"{today + timedelta(days=1)}T00:00:00Z"
+
+    try:
+        df = get_meteomatics_forecast(lat, lon, start, end)
+        st.success("✅ Dati Meteomatics ricevuti")
+        st.line_chart(df.set_index("time")["global_rad:W"])
+    except Exception as e:
+        st.error(f"❌ Meteomatics non disponibile: {e}")

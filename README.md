@@ -1,15 +1,8 @@
-# 🌞 Solar Forecast - ROBOTRONIX for IMEPOWER
+# ☀️ Solar Forecast - ROBOTRONIX for IMEPOWER
 
-Demo di previsione fotovoltaica basata su:
-- Dati storici (CSV)
-- Modello lineare (scikit-learn)
-- Previsioni Meteomatics (radiazione + nuvolosità)
+Questa applicazione usa **Meteomatics API** per generare previsioni solari orarie.
 
-## Login
-- **Username**: FVMANAGER
-- **Password**: MIMMOFABIO
-
-## Deploy su Railway
-1. Caricare tutti i file in una repo GitHub
-2. Collegare la repo a Railway
-3. Deploy automatico con Procfile
+### Come avviare su Railway
+1. Carica questa cartella su un repository GitHub.
+2. Connetti il repo a Railway e deploya.
+3. L'app sarà disponibile online con interfaccia Streamlit.
