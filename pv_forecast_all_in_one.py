@@ -1,102 +1,57 @@
+import os, io, requests, joblib
+import pandas as pd, numpy as np
+from datetime import datetime, timedelta, timezone
 import streamlit as st
-import pandas as pd
-import numpy as np
-import requests
 import folium
 from streamlit_folium import st_folium
-from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
 
-# ----------------- LOGIN -----------------
-def check_password():
-    def password_entered():
-        if st.session_state["username"] == "FVMANAGER" and st.session_state["password"] == "MIMMOFABIO":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
-        else:
-            st.session_state["password_correct"] = False
-    if "password_correct" not in st.session_state:
-        st.text_input("Username", key="username")
-        st.text_input("Password", type="password", key="password", on_change=password_entered)
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Username", key="username")
-        st.text_input("Password", type="password", key="password", on_change=password_entered)
-        st.error("Credenziali non valide")
-        return False
-    else:
-        return True
+st.set_page_config(page_title="ROBOTRONIX – Solar Forecast", layout="wide")
 
-if not check_password():
+# ---------------- Auth ----------------
+if "auth" not in st.session_state:
+    st.session_state["auth"] = False
+if not st.session_state["auth"]:
+    st.title("🔐 Accesso richiesto")
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if u.strip().upper() == "FVMANAGER" and p == "MIMMOFABIO":
+            st.session_state["auth"] = True
+            st.rerun()
+        else:
+            st.error("Credenziali non valide.")
     st.stop()
 
-# ----------------- APP -----------------
-st.sidebar.title("☀️ Menu delle impostazioni")
+# ---------------- Config ----------------
+DEFAULT_LAT, DEFAULT_LON = 40.643278, 16.986083
 
-DATA_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
+st.sidebar.header("📋 Menu delle Impostazioni")
+plant_name = st.sidebar.text_input("Nome impianto", value="Impianto FV")
+plant_kw = st.sidebar.number_input("Potenza di targa (kW)", value=1000.0, step=50.0)
+lat_sidebar = st.sidebar.number_input("Latitudine", value=DEFAULT_LAT, format="%.6f")
+lon_sidebar = st.sidebar.number_input("Longitudine", value=DEFAULT_LON, format="%.6f")
+tilt = st.sidebar.slider("Tilt (°)", min_value=0, max_value=90, value=20, step=1)
+orient = st.sidebar.slider("Orientamento (°, 0=N, 90=E, 180=S, 270=W)", min_value=0, max_value=360, value=180, step=5)
+provider_used = "Meteomatics"
+status_used = "OK"
 
-# Caricamento dati storici
-df = pd.read_csv(DATA_PATH)
-df["Date"] = pd.to_datetime(df["Date"])
-st.title("☀️ Solar Forecast - ROBOTRONIX for IMEPOWER")
+tab1, tab2 = st.tabs(["🔮 Previsioni","🗺️ Mappa"])
 
-# Allenamento modello
-X = df[["G_M0_Wm2"]]
-y = df["E_INT_Daily_kWh"]
-model = LinearRegression().fit(X, y)
+with tab2:
+    st.subheader("Mappa impianto (satellitare)")
+    # Box descrittivo sopra la mappa
+    st.info(f"**{plant_name}**\n\n"
+            f"⚡ Potenza di targa: {plant_kw:.0f} kW\n\n"
+            f"🌍 Lat: {lat_sidebar:.6f}, Lon: {lon_sidebar:.6f}\n\n"
+            f"📐 Tilt: {tilt}°, Orientamento: {orient}°\n\n"
+            f"☁️ Provider: {provider_used} | Stato: {status_used}")
 
-# Input utente
-lat = st.sidebar.number_input("Latitudine", value=40.643278)
-lon = st.sidebar.number_input("Longitudine", value=16.986083)
-tilt = st.sidebar.slider("Tilt (°)", 0, 90, 30)
-orientation = st.sidebar.selectbox("Orientamento", ["Sud", "Est", "Ovest"])
-
-# Selezione fonte dati
-use_meteomatics = st.sidebar.toggle("Usa Meteomatics", value=True)
-
-# Funzione Meteomatics
-def get_meteomatics(lat, lon):
-    username = "teseospa-eiffageenergiesystemesitaly_daniello_fabio"
-    password = "6S8KTHPbrUlp6523T9Xd"
-    start = datetime.utcnow().strftime("%Y-%m-%dT00:00:00Z")
-    end = (datetime.utcnow() + timedelta(days=3)).strftime("%Y-%m-%dT23:59:00Z")
-    url = f"https://api.meteomatics.com/{start}--{end}:PT15M/global_rad:W/ {lat},{lon}/json"
-    r = requests.get(url, auth=(username, password))
-    if r.status_code == 200:
-        data = r.json()["data"][0]["coordinates"][0]["dates"]
-        df = pd.DataFrame(data)
-        df["date"] = pd.to_datetime(df["date"])
-        df["value"] = df["value"].astype(float)
-        return df
-    else:
-        return None
-
-# Previsioni
-if st.button("Genera Previsione"):
-    if use_meteomatics:
-        forecast = get_meteomatics(lat, lon)
-        if forecast is not None:
-            st.success("✅ Dati Meteomatics ricevuti")
-            forecast["Pred_kWh"] = model.predict(forecast[["value"]])
-            for i in range(4):
-                day = (datetime.utcnow().date() + timedelta(days=i-1))
-                dff = forecast[forecast["date"].dt.date == day]
-                if not dff.empty:
-                    st.subheader(f"📅 Previsione {day}")
-                    st.line_chart(dff.set_index("date")["Pred_kWh"])
-                    # CSV giornaliero
-                    daily = dff.groupby(dff["date"].dt.date)["Pred_kWh"].sum()
-                    daily.to_csv(f"forecast_{day}.csv")
-                    # Potenza di picco
-                    peak = dff["Pred_kWh"].max()
-                    st.metric("Potenza di picco stimata (%)", f"{(peak/peak.max())*100:.1f}%")
-        else:
-            st.error("Meteomatics non disponibile, uso Open-Meteo")
-    else:
-        st.warning("Uso Open-Meteo non ancora implementato")
-
-# Mappa Folium
-m = folium.Map(location=[lat, lon], zoom_start=14)
-folium.Marker([lat, lon], popup="📍 Impianto Fotovoltaico").add_to(m)
-st.subheader("🗺️ Mappa Impianto")
-st_folium(m, width=700, height=400)
+    # Mappa Folium incorniciata
+    m = folium.Map(location=[lat_sidebar, lon_sidebar], zoom_start=15, tiles=None)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery", name="Satellite"
+    ).add_to(m)
+    folium.Marker([lat_sidebar, lon_sidebar], tooltip=plant_name).add_to(m)
+    st_folium(m, width=900, height=500)
