@@ -1,8 +1,8 @@
-streamlit
-pandas
+streamlit==1.37.1
+pandas>=2.2.2
 numpy
-scikit-learn
-matplotlib
-altair
 requests
 folium
+streamlit-folium
+scikit-learn
+altair>=5.0.0
