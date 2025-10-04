@@ -1,1 +1,1 @@
-# ROBOTRONIX Solar Forecast (PT15M + Tilt/Orientation + Provider toggle + Map) – Railway Ready (v4)
+# ROBOTRONIX Solar Forecast v5 (PT15M + Tilt/Orientation + Provider toggle + Map + InfoBox) – Railway Ready
