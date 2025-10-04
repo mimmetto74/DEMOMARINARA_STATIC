@@ -1,166 +1,352 @@
-# -*- coding: utf-8 -*-
-import os, base64, math, json, requests
-import numpy as np, pandas as pd
-import altair as alt, folium, streamlit as st
-from streamlit_folium import st_folium
+import os, io, requests, joblib
+import pandas as pd, numpy as np
 from datetime import datetime, timedelta, timezone
+import streamlit as st
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, r2_score
+import folium
+from streamlit_folium import st_folium
 
-APP_TITLE = "Solar Forecast - ROBOTRONIX for IMEPOWER (V7)"
-DATASET_DEFAULT_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
-DATASET_FALLBACK_ABS = "/mnt/data/Dataset_Daily_EnergiaSeparata_2020_2025.csv"
-MODEL_FEATS = ["G_M0_Wm2"]
-TARGET_COL = "E_INT_Daily_kWh"
-DEFAULT_LAT, DEFAULT_LON = 40.643278, 16.986083
-VALID_USER, VALID_PASS = "FVMANAGER", "MIMMOFABIO"
+st.set_page_config(page_title="ROBOTRONIX – Solar Forecast", layout="wide")
 
-st.set_page_config(page_title=APP_TITLE, page_icon="☀️", layout="wide")
-
-def bytes_download_link(data: bytes, filename: str, label: str):
-    import base64
-    b64 = base64.b64encode(data).decode()
-    st.markdown(f'<a href="data:file/octet-stream;base64,{b64}" download="{filename}">{label}</a>', unsafe_allow_html=True)
-
-def load_historical_csv():
-    for p in [DATASET_DEFAULT_PATH, DATASET_FALLBACK_ABS]:
-        if os.path.exists(p):
-            return pd.read_csv(p, parse_dates=["Date"]).sort_values("Date")
-    st.error("Dataset storico non trovato.")
-    return None
-
-def train_linear_model(df):
-    df2 = df.dropna(subset=MODEL_FEATS + [TARGET_COL]).copy()
-    if df2.empty: return None, None
-    X = df2[MODEL_FEATS].values.reshape(-1, len(MODEL_FEATS))
-    y = df2[TARGET_COL].values
-    m = LinearRegression().fit(X, y)
-    yhat = m.predict(X)
-    return m, {"mae": float(np.mean(np.abs(y-yhat))), "r2": float(m.score(X,y)), "n": int(len(df2))}
-
-def open_meteo_fetch(lat, lon, start_dt, days=4):
-    start = start_dt.strftime("%Y-%m-%d")
-    end = (start_dt + timedelta(days=days)).strftime("%Y-%m-%d")
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=shortwave_radiation&timezone=UTC&start_date={start}&end_date={end}"
-    r = requests.get(url, timeout=30); r.raise_for_status()
-    js = r.json(); times = pd.to_datetime(js["hourly"]["time"])
-    vals = js["hourly"].get("shortwave_radiation", [0]*len(times))
-    df = pd.DataFrame({"timestamp": times, "global_rad_Wm2": vals}).set_index("timestamp")
-    return df.resample("15min").interpolate()
-
-def meteomatics_fetch(lat, lon, start_dt, days=4, step="PT15M"):
-    user, pwd = os.environ.get("METEO_USER"), os.environ.get("METEO_PASS")
-    if not user or not pwd: raise RuntimeError("METEO_USER / METEO_PASS mancanti")
-    start = start_dt.strftime("%Y-%m-%dT00:00:00Z")
-    end = (start_dt + timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
-    url = f"https://api.meteomatics.com/{start}--{end}:{step}/global_rad:W/{lat},{lon}/json"
-    r = requests.get(url, auth=(user,pwd), timeout=30); r.raise_for_status()
-    js = r.json(); series=[]
-    vals = js["data"][0]["coordinates"][0]["dates"]
-    for it in vals: series.append((pd.to_datetime(it["date"]), float(it["value"])))
-    return pd.DataFrame(series, columns=["timestamp","global_rad_Wm2"]).set_index("timestamp")
-
-def split_days(df15, base_dt):
-    out={}
-    labels=[("Ieri",-1),("Oggi",0),("Domani",1),("Dopodomani",2)]
-    for lab,off in labels:
-        day = (base_dt + timedelta(days=off)).date()
-        d = df15[df15.index.date==day].copy()
-        out[f"{lab} ({day})"]=d
-    return out
-
-def curve_energy(df15, minutes=15):
-    if df15.empty: return df15.assign(energy_kWh_m2=0.0), 0.0
-    kwh = (df15["global_rad_Wm2"]*(minutes/60.0))/1000.0
-    out = df15.copy(); out["energy_kWh_m2"]=kwh
-    return out, float(kwh.sum())
-
-def make_map(lat,lon):
-    m = folium.Map(location=[lat,lon], tiles="Esri.WorldImagery", zoom_start=17, control_scale=True)
-    html = f"""<div style='background:#fff;padding:10px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.25);'>
-    <h4 style='margin:0 0 6px 0;'>Impianto FV – Marinara</h4>
-    <div style='font-size:12px;'>Lat: {lat:.6f}<br/>Lon: {lon:.6f}<br/>Satellite: Esri World Imagery</div>
-    </div>"""
-    folium.Marker([lat,lon], tooltip="Impianto FV", popup=folium.Popup(html, max_width=260)).add_to(m)
-    return m
-
-# ---------------- UI ----------------
-if "auth_ok" not in st.session_state: st.session_state["auth_ok"]=False
-with st.sidebar:
-    st.subheader("🔐 Login")
-    u=st.text_input("Username"); p=st.text_input("Password", type="password")
-    if st.button("Accedi"):
-        if u.strip().upper()=="FVMANAGER" and p=="MIMMOFABIO":
-            st.session_state["auth_ok"]=True; st.success("Accesso effettuato.")
-        else: st.error("Credenziali non valide.")
-
-if not st.session_state["auth_ok"]:
-    st.title(APP_TITLE); st.stop()
-
-with st.sidebar:
-    st.markdown("## ⚙️ Menu delle impostazioni")
-    lat = st.number_input("Latitudine", value=float(DEFAULT_LAT), step=0.0001)
-    lon = st.number_input("Longitudine", value=float(DEFAULT_LON), step=0.0001)
-    src = st.radio("Sorgente previsioni", ["Meteomatics (preferita)", "Open‑Meteo (fallback)"], index=1)
-    st.caption("Imposta METEO_USER/METEO_PASS per usare Meteomatics.")
-    st.markdown("---")
-
-st.title(APP_TITLE)
-
-# Storico + Modello
-st.header("📊 Storico e Modello")
-df = load_historical_csv()
-if df is not None:
-    st.dataframe(df.tail(200), use_container_width=True)
-    if st.button("Addestra modello con dati storici"):
-        m, met = train_linear_model(df)
-        if m is not None:
-            st.session_state["model"]=m
-            st.success(f"Modello addestrato ✅ MAE={met['mae']:.1f} kWh • R²={met['r2']:.3f} • N={met['n']}")
+# ---------------- Auth ----------------
+if "auth" not in st.session_state:
+    st.session_state["auth"] = False
+if not st.session_state["auth"]:
+    st.title("🔐 Accesso richiesto")
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if u.strip().upper() == "FVMANAGER" and p == "MIMMOFABIO":
+            st.session_state["auth"] = True
+            st.rerun()
         else:
-            st.error("Addestramento fallito.")
+            st.error("Credenziali non valide.")
+    st.stop()
 
-# Previsioni 15m
-st.header("🔮 Previsioni 4 giorni (15 min)")
-base = datetime.utcnow().replace(hour=0,minute=0,second=0,microsecond=0)
-df15=None
-try:
-    if src.startswith("Meteomatics"):
-        try:
-            df15 = meteomatics_fetch(lat,lon, base-timedelta(days=1), days=4, step="PT15M")
-            st.success("Dati Meteomatics ricevuti.")
-        except Exception as e:
-            st.warning(f"Meteomatics non disponibile: {e}. Fallback Open‑Meteo.")
-            df15 = open_meteo_fetch(lat,lon, base-timedelta(days=1), days=4)
+# ---------------- Config ----------------
+DATA_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
+MODEL_PATH = "pv_model.joblib"
+LOG_PATH = "forecast_log.csv"
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+DEFAULT_LAT = 40.643278
+DEFAULT_LON = 16.986083
+
+if "tilt" not in st.session_state: st.session_state["tilt"] = 0
+if "orient" not in st.session_state: st.session_state["orient"] = 180
+
+# Meteomatics creds (in-code per richiesta)
+MM_USER = "teseospa-eiffageenergiesystemesitaly_daniello_fabio"
+MM_PASS = "6S8KTHPbrUlp6523T9Xd"
+
+def ensure_log_file():
+    if not os.path.exists(LOG_PATH) or os.path.getsize(LOG_PATH) == 0:
+        pd.DataFrame(columns=[
+            "timestamp","day_label","provider","status","url",
+            "lat","lon","tilt","orient","sum_rad_corr","pred_kwh","peak_kW","cloud_mean","note"
+        ]).to_csv(LOG_PATH, index=False)
+
+def write_log(**row):
+    ensure_log_file()
+    try:
+        df = pd.read_csv(LOG_PATH)
+    except Exception:
+        df = pd.DataFrame(columns=[
+            "timestamp","day_label","provider","status","url",
+            "lat","lon","tilt","orient","sum_rad_corr","pred_kwh","peak_kW","cloud_mean","note"
+        ])
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    df.to_csv(LOG_PATH, index=False)
+
+@st.cache_data(show_spinner=False)
+def load_data():
+    return pd.read_csv(DATA_PATH, parse_dates=["Date"])
+
+def train_model():
+    df0 = load_data()
+    if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
+        df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
+    df = df0.dropna(subset=["E_INT_Daily_kWh","G_M0_Wm2"])
+    if df.empty:
+        return float("nan"), float("nan"), None, None
+    train = df[df["Date"] < "2025-01-01"]
+    test  = df[df["Date"] >= "2025-01-01"]
+    X_train, y_train = train[["G_M0_Wm2"]], train["E_INT_Daily_kWh"]
+    model = LinearRegression().fit(X_train, y_train)
+    joblib.dump(model, MODEL_PATH)
+    mae = r2 = float("nan")
+    if len(test) > 0:
+        y_pred = model.predict(test[["G_M0_Wm2"]])
+        mae = float(mean_absolute_error(test["E_INT_Daily_kWh"], y_pred))
+        r2  = float(r2_score(test["E_INT_Daily_kWh"], y_pred))
+    coef = float(model.coef_[0]) if hasattr(model, "coef_") else None
+    intercept = float(model.intercept_) if hasattr(model, "intercept_") else None
+    return mae, r2, coef, intercept
+
+def load_model():
+    if not os.path.exists(MODEL_PATH):
+        train_model()
+    return joblib.load(MODEL_PATH)
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None):
+    if tilt is not None and orient is not None and tilt > 0:
+        rad_param = f"global_rad_tilt_{int(round(tilt))}_orientation_{int(round(orient))}:W"
     else:
-        df15 = open_meteo_fetch(lat,lon, base-timedelta(days=1), days=4)
-except Exception as e:
-    st.error(f"Errore fetch previsioni: {e}")
+        rad_param = "global_rad:W"
+    url = (f"https://api.meteomatics.com/"
+           f"{start_iso}--{end_iso}:PT15M/"
+           f"{rad_param},total_cloud_cover:p/"
+           f"{lat},{lon}/json")
+    r = requests.get(url, auth=(MM_USER, MM_PASS), timeout=30)
+    r.raise_for_status()
+    j = r.json()
+    rows = []
+    for blk in j.get("data", []):
+        prm = blk.get("parameter")
+        if prm.endswith(":W"): prm = "GlobalRad_W"
+        if prm == "total_cloud_cover:p": prm = "CloudCover_P"
+        for d in blk["coordinates"][0]["dates"]:
+            rows.append({"time": d["date"], prm: d["value"]})
+    df = pd.DataFrame(rows)
+    if df.empty: return url, df
+    df = df.groupby("time", as_index=False).mean().sort_values("time")
+    if "GlobalRad_W" not in df.columns: df["GlobalRad_W"] = np.nan
+    if "CloudCover_P" not in df.columns: df["CloudCover_P"] = np.nan
+    df["time"] = pd.to_datetime(df["time"])
+    df["fonte"] = "Meteomatics"
+    return url, df
 
-if df15 is not None and not df15.empty:
-    days = split_days(df15, base)
-    energy = {}
-    for lab, d in days.items():
-        colA,colB = st.columns([2,1])
-        with colA:
-            ch = alt.Chart(d.reset_index()).mark_line().encode(
-                x=alt.X("timestamp:T", title="Ora"),
-                y=alt.Y("global_rad_Wm2:Q", title="Radiazione (W/m²)"),
-                tooltip=["timestamp:T","global_rad_Wm2:Q"]
-            ).properties(height=260, title=f"Radiazione – {lab}")
-            st.altair_chart(ch, use_container_width=True)
-        with colB:
-            enr, tot = curve_energy(d, minutes=15); energy[lab]=tot
-            st.metric("Energia [kWh/m²]", f"{tot:.2f}")
-            if not d.empty:
-                st.metric("Picco irradianza [%]", f"{(float(d['global_rad_Wm2'].max())/1000*100):.0f}%")
-        if not d.empty:
-            csv = d.to_csv().encode("utf-8")
-            bytes_download_link(csv, f"curva_15m_{lab.replace(' ','_')}.csv", "⬇️ Scarica CSV 15m")
+def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
+    url = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+           f"&hourly=direct_radiation,cloudcover&start_date={start_date}&end_date={end_date}")
+    r = requests.get(url, timeout=25)
+    r.raise_for_status()
+    j = r.json()
+    hh = j.get("hourly", {})
+    times = hh.get("time", [])
+    rad   = hh.get("direct_radiation", [np.nan]*len(times))
+    cld   = hh.get("cloudcover", [np.nan]*len(times))
+    df = pd.DataFrame({"time": times, "GlobalRad_W": rad, "CloudCover_P": cld})
+    df["time"] = pd.to_datetime(df["time"])
+    df["fonte"] = "Open-Meteo"
+    df = df.set_index("time").resample("15min").interpolate(method="time").reset_index()
+    return url, df
 
-    dtab = pd.DataFrame([{"Giorno":k, "Energia_kWh_m2":v} for k,v in energy.items()])
-    st.dataframe(dtab, use_container_width=True)
-    bytes_download_link(dtab.to_csv(index=False).encode("utf-8"), "aggregato_giornaliero.csv", "⬇️ Scarica aggregato")
+def compute_curve_and_daily(df, model, plant_kw):
+    if df is None or df.empty:
+        return None, 0.0, 0.0, 0.0, float("nan")
+    df = df.copy().sort_values("time")
+    df["GlobalRad_W"] = df["GlobalRad_W"].clip(lower=0)
+    df["CloudCover_P"] = df["CloudCover_P"].clip(lower=0, upper=100)
+    df["rad_corr"] = df["GlobalRad_W"] * (1 - df["CloudCover_P"]/100.0)
+    sum_rad = df["rad_corr"].sum()
+    pred_kwh = float(model.predict([[sum_rad]])[0]) if sum_rad > 0 else 0.0
+    if sum_rad > 0:
+        df["kWh_curve"] = pred_kwh * (df["rad_corr"]/sum_rad)
+    else:
+        df["kWh_curve"] = 0.0
+    df["kW_inst"] = df["kWh_curve"] * 4.0
+    peak_kW = float(df["kW_inst"].max()) if len(df) else 0.0
+    peak_pct = float(peak_kW/plant_kw*100.0) if plant_kw > 0 else 0.0
+    cloud_mean = float(df["CloudCover_P"].mean()) if "CloudCover_P" in df.columns else float("nan")
+    return df, pred_kwh, peak_kW, peak_pct, cloud_mean
 
-# Mappa
-st.header("🗺️ Mappa impianto (satellitare)")
-mp = make_map(lat,lon); st_folium(mp, height=520)
+def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
+    day = (datetime.now(timezone.utc).date() + timedelta(days=offset_days))
+    start_iso = f"{day}T00:00:00Z"; end_iso = f"{day + timedelta(days=1)}T00:00:00Z"
+    provider = "Meteomatics"; status = "OK"; url = ""; df = None
+
+    def try_meteomatics():
+        nonlocal url, df, provider, status
+        try:
+            url, df = fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=tilt, orient=orient)
+            provider, status = "Meteomatics", "OK"
+        except Exception as e:
+            provider, status, url = "Meteomatics", f"ERROR: {e}", ""
+            df = None
+
+    def try_openmeteo():
+        nonlocal url, df, provider, status
+        try:
+            url, df = fetch_openmeteo_hourly(lat, lon, str(day), str(day + timedelta(days=1)))
+            provider, status = "Open-Meteo", "OK"
+        except Exception as e:
+            provider, status, url = "Open-Meteo", f"ERROR: {e}", ""
+            df = None
+
+    if provider_pref == "Meteomatics":
+        try_meteomatics()
+        if df is None: try_openmeteo()
+    elif provider_pref == "Open-Meteo":
+        try_openmeteo()
+    else:  # Auto
+        try_meteomatics()
+        if df is None: try_openmeteo()
+
+    if df is None or df.empty:
+        write_log(timestamp=datetime.utcnow().isoformat(), day_label=label,
+                  provider=provider, status=status, url=url, lat=lat, lon=lon,
+                  tilt=tilt, orient=orient, sum_rad_corr="", pred_kwh="", peak_kW="", cloud_mean="", note="no data")
+        return None, 0.0, 0.0, 0.0, float("nan"), provider, status, url
+
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+    write_log(timestamp=datetime.utcnow().isoformat(), day_label=label,
+              provider=provider, status=status, url=url, lat=lat, lon=lon,
+              tilt=tilt, orient=orient, sum_rad_corr=float(df2["rad_corr"].sum()), pred_kwh=float(pred_kwh),
+              peak_kW=float(peak_kW), cloud_mean=float(cloud_mean), note="")
+
+    if autosave:
+        # salva CSV curva 15min e aggregato giorno
+        curve_csv = df2[["time","GlobalRad_W","CloudCover_P","rad_corr","kWh_curve","kW_inst"]].copy()
+        curve_csv.to_csv(os.path.join(LOG_DIR, f"curve_{label.lower()}_15min.csv"), index=False)
+        agg_csv = pd.DataFrame([{
+            "date": str(day),
+            "energy_kWh": float(pred_kwh),
+            "peak_kW": float(peak_kW),
+            "cloud_mean": float(cloud_mean)
+        }])
+        agg_csv.to_csv(os.path.join(LOG_DIR, f"daily_{label.lower()}.csv"), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
+# -------- UI ---------
+st.title("☀️ Solar Forecast - ROBOTRONIX for IMEPOWER")
+
+ensure_log_file()
+st.sidebar.header("Impostazioni")
+provider_pref = st.sidebar.selectbox("Fonte meteo:", ["Auto","Meteomatics","Open-Meteo"])
+plant_kw = st.sidebar.number_input("Potenza di targa impianto (kW)", value=1000.0, step=50.0, min_value=0.0)
+autosave = st.sidebar.toggle("Salvataggio automatico CSV (curva + aggregato)", value=True)
+
+st.sidebar.header("📍 Posizione & Piano")
+lat_sidebar = st.sidebar.number_input("Latitudine", value=DEFAULT_LAT, format="%.6f")
+lon_sidebar = st.sidebar.number_input("Longitudine", value=DEFAULT_LON, format="%.6f")
+st.session_state["tilt"] = st.sidebar.slider("Tilt (°)", min_value=0, max_value=90, value=st.session_state["tilt"], step=1)
+st.session_state["orient"] = st.sidebar.slider("Orientation (°, 0=N, 90=E, 180=S, 270=W)", min_value=0, max_value=360, value=st.session_state["orient"], step=5)
+
+st.sidebar.header("📥 Log Previsioni")
+log_df = pd.read_csv(LOG_PATH)
+flt = st.sidebar.selectbox("Filtro log", ["Tutti","Solo Meteomatics","Solo Open‑Meteo","Solo Errori"])
+ldf = log_df.copy()
+if flt=="Solo Meteomatics":
+    ldf = ldf[ldf["provider"]=="Meteomatics"]
+elif flt=="Solo Open‑Meteo":
+    ldf = ldf[ldf["provider"]=="Open-Meteo"]
+elif flt=="Solo Errori":
+    ldf = ldf[ldf["status"].astype(str).str.startswith("ERROR", na=False)]
+st.sidebar.write(f"Righe: {len(ldf)}")
+csv_io = io.StringIO(); ldf.to_csv(csv_io, index=False)
+st.sidebar.download_button("⬇️ Scarica log filtrato", csv_io.getvalue(), "forecast_log_filtered.csv", "text/csv")
+
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa"])
+
+with tab1:
+    try:
+        df = load_data()
+        st.subheader("Storico produzione (kWh) e irradianza (W/m²)")
+        if "E_INT_Daily_KWh" in df.columns and "E_INT_Daily_kWh" not in df.columns:
+            df = df.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
+        st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh","G_M0_Wm2"]])
+    except Exception as e:
+        st.error(f"Impossibile caricare dataset: {e}")
+
+with tab2:
+    c1, c2, c3 = st.columns(3)
+    if c1.button("Addestra / Riaddestra modello"):
+        mae, r2, coef, intercept = train_model()
+        st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
+        if coef is not None and intercept is not None:
+            st.info(f"**Slope**: {coef:.6f}  |  **Intercept**: {intercept:.3f}")
+    if os.path.exists(MODEL_PATH):
+        model = load_model()
+        try:
+            coef = float(model.coef_[0]); intercept = float(model.intercept_)
+            c2.metric("Slope (kWh per unità irradianza)", f"{coef:.6f}")
+            c3.metric("Intercept", f"{intercept:.3f}")
+        except Exception:
+            pass
+
+with tab3:
+    st.subheader("Previsioni (PT15M, tilt/orient, provider toggle)")
+    go = st.button("Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)")
+    model = load_model()
+    results = {}
+
+    sections = {"Ieri": st.container(), "Oggi": st.container(), "Domani": st.container(), "Dopodomani": st.container()}
+
+    if go:
+        for label, off in [("Ieri",-1),("Oggi",0),("Domani",1),("Dopodomani",2)]:
+            with sections[label]:
+                st.markdown(f"### {label}")
+                dfp, energy, peak_kW, peak_pct, cloud_mean, provider, status, url = forecast_for_day(
+                    lat_sidebar, lon_sidebar, off, label, model, st.session_state["tilt"], st.session_state["orient"], provider_pref, plant_kw, autosave=autosave
+                )
+                results[label] = dfp
+                st.caption(f"Provider: **{provider}** | Stato: **{status}**")
+                if url: st.code(url, language="text")
+                if dfp is None or dfp.empty:
+                    st.warning("Nessun dato disponibile.")
+                else:
+                    metr1, metr2, metr3, metr4 = st.columns(4)
+                    metr1.metric(f"Energia stimata {label}", f"{energy:.1f} kWh")
+                    metr2.metric("Picco stimato", f"{peak_kW:.1f} kW")
+                    metr3.metric("% della targa", f"{peak_pct:.1f}%")
+                    metr4.metric("Nuvolosità media", f"{cloud_mean:.0f}%")
+                    chart_df = dfp.set_index("time")[["kWh_curve"]].rename(columns={"kWh_curve":"Produzione stimata (kWh/15min)"})
+                    st.line_chart(chart_df)
+
+                    # Download curva 15-min (per-giorno)
+                    csv_buf = io.StringIO()
+                    out_df = dfp[["time","GlobalRad_W","CloudCover_P","rad_corr","kWh_curve","kW_inst"]].copy()
+                    out_df.to_csv(csv_buf, index=False)
+                    st.download_button(f"⬇️ Scarica curva 15-min ({label})", csv_buf.getvalue(),
+                                       file_name=f"curve_{label.replace('ò','o').lower()}_15min.csv", mime="text/csv")
+
+                    # Scarica aggregato giornaliero (per-giorno)
+                    daily_buf = io.StringIO()
+                    pd.DataFrame([{"date": str((datetime.now(timezone.utc).date() + timedelta(days=off))),
+                                   "energy_kWh": energy, "peak_kW": peak_kW, "cloud_mean": cloud_mean}]).to_csv(daily_buf, index=False)
+                    st.download_button(f"⬇️ Scarica aggregato ({label})", daily_buf.getvalue(),
+                                       file_name=f"daily_{label.replace('ò','o').lower()}.csv", mime="text/csv")
+
+        # confronto + export unico
+        st.subheader("📊 Confronto curve (4 giorni, 15 min)")
+        comp = pd.DataFrame()
+        for lbl, dfp in results.items():
+            if dfp is not None and not dfp.empty:
+                tmp = dfp[["time","kWh_curve"]].rename(columns={"kWh_curve": lbl})
+                comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
+        if not comp.empty:
+            comp = comp.set_index("time")
+            st.line_chart(comp)
+
+            # download unico delle 4 curve
+            all_curves = pd.DataFrame()
+            for lbl, dfp in results.items():
+                if dfp is not None and not dfp.empty:
+                    tmp = dfp[["time","GlobalRad_W","CloudCover_P","rad_corr","kWh_curve","kW_inst"]].copy()
+                    tmp["giorno"] = lbl
+                    all_curves = pd.concat([all_curves, tmp], ignore_index=True)
+            if not all_curves.empty:
+                buf_all = io.StringIO()
+                all_curves.to_csv(buf_all, index=False)
+                st.download_button("⬇️ Scarica TUTTE le curve (CSV unico)", buf_all.getvalue(), "all_curves_15min.csv", "text/csv")
+        else:
+            st.info("Nessuna curva disponibile per il confronto.")
+
+with tab4:
+    st.subheader("Mappa impianto (satellitare)")
+    m = folium.Map(location=[lat_sidebar, lon_sidebar], zoom_start=15, tiles=None)
+    # Satellite tiles (ESRI World Imagery)
+    folium.TileLayer(tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                     attr="Esri World Imagery", name="Satellite").add_to(m)
+    folium.Marker(
+        location=[lat_sidebar, lon_sidebar],
+        tooltip="Impianto FV",
+        popup=folium.Popup(html=f"<b>Impianto FV</b><br>Lat: {lat_sidebar:.6f}<br>Lon: {lon_sidebar:.6f}<br>Tilt: {st.session_state['tilt']}°<br>Orient: {st.session_state['orient']}°", max_width=250)
+    ).add_to(m)
+    folium.LayerControl().add_to(m)
+    st_folium(m, width=900, height=550)

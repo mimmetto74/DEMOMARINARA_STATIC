@@ -1,2 +1,1 @@
-Avvio: `pip install -r requirements.txt` poi `streamlit run pv_forecast_all_in_one.py`.
-Login: FVMANAGER / MIMMOFABIO.
+# ROBOTRONIX Solar Forecast (PT15M + Tilt/Orientation + Provider toggle + Map) – Railway Ready (v4)
