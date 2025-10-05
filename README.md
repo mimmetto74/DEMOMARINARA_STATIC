@@ -1,3 +1,1 @@
-# ROBOTRONIX – Solar Forecast (V4+)
-
-Vedi il file principale `pv_forecast_all_in_one.py`.
+# ROBOTRONIX Solar Forecast (PT15M + Tilt/Orientation + Provider toggle + Map) – Railway Ready (v4)
