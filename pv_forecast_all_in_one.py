@@ -178,6 +178,7 @@ def compute_curve_and_daily(df, model, plant_kw):
     peak_kW = float(df["kW_inst"].max()) if len(df) else 0.0
     peak_pct = float(peak_kW/plant_kw*100.0) if plant_kw > 0 else 0.0
     cloud_mean = float(df["CloudCover_P"].mean()) if "CloudCover_P" in df.columns else float("nan")
+    return df, pred_kwh, peak_kW, peak_pct, cloud_mean
     
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
