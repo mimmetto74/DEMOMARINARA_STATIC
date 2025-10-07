@@ -338,13 +338,13 @@ with tab3:
                     metr4.metric("Nuvolosità media", f"{cloud_mean:.0f}%")
                     chart_df = dfp.set_index("time")[["kWh_curve"]].rename(columns={"kWh_curve":"Produzione stimata (kWh/15min)"})
                     
-# Grafico interattivo (kWh/15min) con tooltip data/ora
-ch = alt.Chart(chart_df.reset_index()).mark_line().encode(
-    x=alt.X("time:T", title="Data / Ora"),
-    y=alt.Y("Produzione stimata (kWh/15min):Q", title="kWh / 15 min"),
-    tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Produzione stimata (kWh/15min):Q", title="kWh (15m)", format=".3f")]
-).interactive()
-st.altair_chart(ch, use_container_width=True)
+                    # Grafico interattivo (kWh/15min) con tooltip data/ora
+                    ch = alt.Chart(chart_df.reset_index()).mark_line().encode(
+                        x=alt.X("time:T", title="Data / Ora"),
+                        y=alt.Y("Produzione stimata (kWh/15min):Q", title="kWh / 15 min"),
+                        tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Produzione stimata (kWh/15min):Q", title="kWh (15m)", format=".3f")]
+                    ).interactive()
+                    st.altair_chart(ch, use_container_width=True)
 
 
                     # Download curva 15-min (per-giorno)
@@ -371,14 +371,14 @@ st.altair_chart(ch, use_container_width=True)
         if not comp.empty:
             comp = comp.set_index("time")
             
-long = comp.reset_index().melt("time", var_name="Giorno", value_name="kWh_15m")
-chc = alt.Chart(long).mark_line().encode(
-    x=alt.X("time:T", title="Data / Ora"),
-    y=alt.Y("kWh_15m:Q", title="kWh / 15 min"),
-    color="Giorno:N",
-    tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Giorno:N"), alt.Tooltip("kWh_15m:Q", title="kWh (15m)", format=".3f")]
-).interactive()
-st.altair_chart(chc, use_container_width=True)
+            long = comp.reset_index().melt("time", var_name="Giorno", value_name="kWh_15m")
+            chc = alt.Chart(long).mark_line().encode(
+                x=alt.X("time:T", title="Data / Ora"),
+                y=alt.Y("kWh_15m:Q", title="kWh / 15 min"),
+                color="Giorno:N",
+                tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Giorno:N"), alt.Tooltip("kWh_15m:Q", title="kWh (15m)", format=".3f")]
+            ).interactive()
+            st.altair_chart(chc, use_container_width=True)
 
 
             # download unico delle 4 curve
