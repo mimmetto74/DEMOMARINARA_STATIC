@@ -166,7 +166,8 @@ def compute_curve_and_daily(df, model, plant_kw):
     df["CloudCover_P"] = df["CloudCover_P"].clip(lower=0, upper=100)
     df["rad_corr"] = df["GlobalRad_W"] * (1 - df["CloudCover_P"]/100.0)
     sum_rad = df["rad_corr"].sum()
-    pred_kwh = float(model.predict([[sum_rad]])[0]) if sum_rad > 0 else 0.0
+    mean_rad = df["rad_corr"].mean()
+    pred_kwh = float(model.predict([[mean_rad]])[0]) if sum_rad > 0 else 0.0
     # Apply overlay correction so estimated and real overlap better
     alpha, beta = overlay_correction(model)
     pred_kwh = max(0.0, alpha * pred_kwh + beta)
@@ -338,12 +339,13 @@ with tab3:
                     metr3.metric("% della targa", f"{peak_pct:.1f}%")
                     metr4.metric("Nuvolosità media", f"{cloud_mean:.0f}%")
                     chart_df = dfp.set_index("time")[["kWh_curve"]].rename(columns={"kWh_curve":"Produzione stimata (kWh/15min)"})
+                    chart_df["time_str"] = chart_df.index.strftime("%Y-%m-%d %H:%M")
                     
                     # Grafico interattivo (kWh/15min) con tooltip data/ora
                     ch = alt.Chart(chart_df.reset_index()).mark_line().encode(
                         x=alt.X("time:T", title="Data / Ora"),
                         y=alt.Y("Produzione stimata (kWh/15min):Q", title="kWh / 15 min"),
-                        tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Produzione stimata (kWh/15min):Q", title="kWh (15m)", format=".3f")]
+                        tooltip=[alt.Tooltip("time_str:N", title="Data/ora"), alt.Tooltip("Produzione stimata (kWh/15min):Q", title="kWh (15m)", format=".3f")]
                     ).interactive()
                     st.altair_chart(ch, use_container_width=True)
 
@@ -372,12 +374,14 @@ with tab3:
         if not comp.empty:
             comp = comp.set_index("time")
             
-            long = comp.reset_index().melt("time", var_name="Giorno", value_name="kWh_15m")
+            df_long = comp.reset_index()
+            df_long["time_str"] = df_long["time"].dt.strftime("%Y-%m-%d %H:%M")
+            long = df_long.melt(["time","time_str"], var_name="Giorno", value_name="kWh_15m")
             chc = alt.Chart(long).mark_line().encode(
                 x=alt.X("time:T", title="Data / Ora"),
                 y=alt.Y("kWh_15m:Q", title="kWh / 15 min"),
                 color="Giorno:N",
-                tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Giorno:N"), alt.Tooltip("kWh_15m:Q", title="kWh (15m)", format=".3f")]
+                tooltip=[alt.Tooltip("time_str:N", title="Data/ora"), alt.Tooltip("Giorno:N"), alt.Tooltip("kWh_15m:Q", title="kWh (15m)", format=".3f")]
             ).interactive()
             st.altair_chart(chc, use_container_width=True)
 
