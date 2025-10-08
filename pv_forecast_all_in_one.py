@@ -274,7 +274,6 @@ with tab3:
     go = st.button("Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)")
     model = load_model()
     results = {}
-    st.session_state.setdefault('pred_curves', {})
 
     sections = {"Ieri": st.container(), "Oggi": st.container(), "Domani": st.container(), "Dopodomani": st.container()}
 
@@ -286,7 +285,6 @@ with tab3:
                     lat_sidebar, lon_sidebar, off, label, model, st.session_state["tilt"], st.session_state["orient"], provider_pref, plant_kw, autosave=autosave
                 )
                 results[label] = dfp
-                st.session_state['pred_curves'][label] = dfp
                 st.caption(f"Provider: **{provider}** | Stato: **{status}**")
                 if url: st.code(url, language="text")
                 if dfp is None or dfp.empty:
@@ -352,78 +350,3 @@ with tab4:
     ).add_to(m)
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=550)
-
-
-
-with tab5:
-    st.subheader("✅ Validazione previsioni vs produzione reale")
-    st.caption("Carica un CSV con la produzione reale (es. SMA): separatore ';' e virgola decimale. Oppure usa le previsioni calcolate.")
-
-    real_file = st.file_uploader("CSV produzione reale", type=["csv"])
-    use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
-    pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
-
-    if real_file is not None:
-        try:
-            df_real15, df_real_daily = normalize_real_csv(real_file)
-            st.success(f"Dati reali: {df_real15.index.min()} → {df_real15.index.max()}  ({len(df_real_daily)} giorni)")
-
-            pred_source = None
-            if use_session_pred and 'pred_curves' in st.session_state and len(st.session_state['pred_curves'])>0:
-                labels = list(st.session_state['pred_curves'].keys())
-                sel = st.selectbox("Scegli la previsione calcolata", labels, index=0)
-                pred_source = st.session_state['pred_curves'][sel].copy().set_index('time')
-            elif not use_session_pred and pred_file is not None:
-                import pandas as pd
-                pred_df = pd.read_csv(pred_file, parse_dates=['time']).set_index('time')
-                pred_source = pred_df
-            else:
-                st.info("Seleziona una previsione o carica un CSV con la curva prevista.")
-
-            if pred_source is not None:
-                lag = st.slider("Shift previsione (multipli di 15 minuti)", -8, 8, 0)
-                metrics, df_eval, df_daily = evaluate_prediction_vs_real(df_real15, pred_source, apply_shift=lag)
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("MAE (kWh / 15m)", f"{metrics['MAE_15m_kWh']:.3f}")
-                c2.metric("RMSE (kWh / 15m)", f"{metrics['RMSE_15m_kWh']:.3f}")
-                c3.metric("MAPE 15m (%)", f"{metrics['MAPE_15m_%']:.1f}%")
-                c4.metric("R²", f"{metrics['R2']:.3f}")
-                c5, c6 = st.columns(2)
-                c5.metric("Energia reale (kWh)", f"{metrics['Energy_real_kWh']:.1f}")
-                c6.metric("Energia prevista (kWh)", f"{metrics['Energy_pred_kWh']:.1f}")
-
-                plot = df_eval.reset_index().rename(columns={'index':'time'})
-                plot['time_str'] = plot['time'].dt.strftime('%Y-%m-%d %H:%M')
-                long = plot[['time','time_str','kWh_real','kWh_pred']].melt(['time','time_str'], var_name='Serie', value_name='kWh_15m')
-                ch = alt.Chart(long).mark_line().encode(
-                    x=alt.X('time:T', title='Data / Ora'),
-                    y=alt.Y('kWh_15m:Q', title='kWh / 15 min'),
-                    color='Serie:N',
-                    tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('Serie:N'), alt.Tooltip('kWh_15m:Q', title='kWh (15m)', format='.3f')]
-                ).interactive()
-                st.altair_chart(ch, use_container_width=True)
-
-                sc = alt.Chart(df_eval.reset_index()).mark_point().encode(
-                    x=alt.X('kWh_real:Q', title='Reale (kWh/15m)'),
-                    y=alt.Y('kWh_pred:Q', title='Prevista (kWh/15m)'),
-                    tooltip=[alt.Tooltip('time:T', title='Data/ora'), alt.Tooltip('kWh_real:Q'), alt.Tooltip('kWh_pred:Q')]
-                ).interactive()
-                st.altair_chart(sc, use_container_width=True)
-
-                dl = df_daily.reset_index().melt('time', var_name='Serie', value_name='kWh_day')
-                chd = alt.Chart(dl).mark_bar().encode(
-                    x=alt.X('time:T', title='Giorno'),
-                    y=alt.Y('kWh_day:Q', title='kWh (giorno)'),
-                    color='Serie:N'
-                )
-                st.altair_chart(chd, use_container_width=True)
-
-                import io
-                buf15 = io.StringIO(); df_eval.to_csv(buf15, index=True)
-                st.download_button("⬇️ Scarica confronto 15‑min (CSV)", buf15.getvalue(), file_name="confronto_15min.csv", mime="text/csv")
-                bufd = io.StringIO(); df_daily.to_csv(bufd, index=True)
-                st.download_button("⬇️ Scarica confronto giornaliero (CSV)", bufd.getvalue(), file_name="confronto_daily.csv", mime="text/csv")
-
-        except Exception as e:
-            st.error(f"Errore nel caricamento o confronto: {e}")
