@@ -41,6 +41,25 @@ def normalize_real_csv(file_like):
 
 def evaluate_prediction_vs_real(real15, pred15, tz="Europe/Rome", apply_shift=0):
     import pandas as pd, numpy as np
+    # normalizza indici: porta a tz scelto se tz-aware e poi rimuovi tz (naive) per unione sicura
+    def _to_naive(idx):
+        try:
+            idx = pd.DatetimeIndex(idx)
+            if getattr(idx, "tz", None) is not None:
+                try:
+                    idx = idx.tz_convert(tz)
+                except Exception:
+                    pass
+                idx = idx.tz_localize(None)
+        except Exception:
+            return pd.DatetimeIndex(idx)
+        return idx
+    try:
+        real15 = real15.copy(); real15.index = _to_naive(real15.index)
+        pred15 = pred15.copy(); pred15.index = _to_naive(pred15.index)
+    except Exception:
+        pass
+    import pandas as pd, numpy as np
     pred = pred15.copy()
     if 'kWh_15m' in pred.columns: e = pred['kWh_15m']
     elif 'kWh_curve' in pred.columns: e = pred['kWh_curve']
@@ -421,7 +440,7 @@ with tab3:
                 except Exception:
                     st.session_state['pred_curves'][label] = dfp
                 st.caption(f"Provider: **{provider}** | Stato: **{status}**")
-                if url: st.code(url, language="text")
+                # URL Meteomatics nascosto
                 if dfp is None or dfp.empty:
                     st.warning("Nessun dato disponibile.")
                 else:
@@ -430,8 +449,33 @@ with tab3:
                     metr2.metric("Picco stimato", f"{peak_kW:.1f} kW")
                     metr3.metric("% della targa", f"{peak_pct:.1f}%")
                     metr4.metric("Nuvolosità media", f"{cloud_mean:.0f}%")
-                    chart_df = dfp.set_index("time")[["kWh_curve"]].rename(columns={"kWh_curve":"Produzione stimata (kWh/15min)"})
-                    st.line_chart(chart_df)
+
+chart_df = dfp.copy()
+chart_df["time"] = pd.to_datetime(chart_df["time"])
+chart_df["time_str"] = chart_df["time"].dt.strftime("%Y-%m-%d %H:%M")
+if "kWh_curve" in chart_df.columns:
+    ycol = "kWh_curve"
+elif "kWh_15m" in chart_df.columns:
+    ycol = "kWh_15m"
+else:
+    # fallback se abbiamo solo kW_inst
+    chart_df["kWh_fallback"] = chart_df.get("kW_inst", 0) / 4.0
+    ycol = "kWh_fallback"
+ch = (
+    alt.Chart(chart_df)
+    .mark_line()
+    .encode(
+        x=alt.X("time:T", title="Data / Ora"),
+        y=alt.Y(f"{ycol}:Q", title="kWh (15m)"),
+        tooltip=[
+            alt.Tooltip("time_str:N", title="Data/ora"),
+            alt.Tooltip(f"{ycol}:Q", title="kWh (15m)", format=".3f"),
+        ],
+    )
+    .interactive()
+)
+st.altair_chart(ch, use_container_width=True)
+
 
                     # Download curva 15-min (per-giorno)
                     csv_buf = io.StringIO()
@@ -454,9 +498,29 @@ with tab3:
             if dfp is not None and not dfp.empty:
                 tmp = dfp[["time","kWh_curve"]].rename(columns={"kWh_curve": lbl})
                 comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
-        if not comp.empty:
-            comp = comp.set_index("time")
-            st.line_chart(comp)
+        
+if not comp.empty:
+    comp_alt = comp.copy()
+    comp_alt["time"] = pd.to_datetime(comp_alt["time"])
+    comp_alt["time_str"] = comp_alt["time"].dt.strftime("%Y-%m-%d %H:%M")
+    long = comp_alt.melt(["time","time_str"], var_name="Giorno", value_name="kWh_15m")
+    ch2 = (
+        alt.Chart(long)
+        .mark_line()
+        .encode(
+            x=alt.X("time:T", title="Data / Ora"),
+            y=alt.Y("kWh_15m:Q", title="kWh (15m)"),
+            color=alt.Color("Giorno:N", title="Selezione"),
+            tooltip=[
+                alt.Tooltip("time_str:N", title="Data/ora"),
+                alt.Tooltip("Giorno:N"),
+                alt.Tooltip("kWh_15m:Q", title="kWh (15m)", format=".3f"),
+            ],
+        )
+        .interactive()
+    )
+    st.altair_chart(ch2, use_container_width=True)
+
 
             # download unico delle 4 curve
             all_curves = pd.DataFrame()
