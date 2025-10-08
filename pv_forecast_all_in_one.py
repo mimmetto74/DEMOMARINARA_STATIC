@@ -19,6 +19,12 @@ def normalize_real_csv(file_like):
     time_col = df.columns[0]; val_col = df.columns[1] if len(df.columns)>1 else None
     if val_col is None: raise ValueError("CSV non valido: servono 2 colonne (timestamp; valore).")
     df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
+    # drop tz if any
+    try:
+        if hasattr(df[time_col].dt, 'tz') and df[time_col].dt.tz is not None:
+            df[time_col] = df[time_col].dt.tz_localize(None)
+    except Exception:
+        pass
     df = df.dropna(subset=[time_col]).sort_values(time_col)
     df[val_col] = pd.to_numeric(df[val_col], errors='coerce').fillna(0.0)
     s = df.set_index(time_col)[val_col].astype(float).rename('kWh_15m')
@@ -50,6 +56,28 @@ def evaluate_prediction_vs_real(real15, pred15, apply_shift=0):
                'MAE_daily_kWh': float((daily['kWh_pred'] - daily['kWh_real']).abs().mean()) if len(daily) else float('nan'),
                'MAPE_daily_%': float(daily['abs_pct_err'].mean()) if len(daily) else float('nan'),
                'Energy_real_kWh': float(df['kWh_real'].sum()), 'Energy_pred_kWh': float(df['kWh_pred'].sum())}
+    # --- TZ normalize: convert tz-aware to Europe/Rome and drop tz to avoid join errors ---
+    def _to_naive_local(idx):
+        try:
+            if getattr(idx, 'tz', None) is not None:
+                try:
+                    return idx.tz_convert('Europe/Rome').tz_localize(None)
+                except Exception:
+                    return idx.tz_localize(None)
+        except Exception:
+            return idx
+        return idx
+
+    try:
+        if hasattr(real15, 'index'):
+            real15 = real15.copy()
+            real15.index = _to_naive_local(real15.index)
+        if hasattr(pred, 'index'):
+            pred = pred.copy()
+            pred.index = _to_naive_local(pred.index)
+    except Exception:
+        pass
+    
     return metrics, df, daily
 
 
@@ -334,7 +362,14 @@ with tab3:
                     lat_sidebar, lon_sidebar, off, label, model, st.session_state["tilt"], st.session_state["orient"], provider_pref, plant_kw, autosave=autosave
                 )
                 results[label] = dfp
-                st.session_state['pred_curves'][label] = dfp
+                try:
+                    dfpp = dfp.copy()
+                    dfpp['time'] = pd.to_datetime(dfpp['time'], utc=True, errors='coerce')
+                    if hasattr(dfpp['time'].dt, 'tz'):
+                        dfpp['time'] = dfpp['time'].dt.tz_convert('Europe/Rome').dt.tz_localize(None)
+                    st.session_state['pred_curves'][label] = dfpp
+                except Exception:
+                    st.session_state['pred_curves'][label] = dfp
                 st.caption(f"Provider: **{provider}** | Stato: **{status}**")
                 if url: st.code(url, language="text")
                 if dfp is None or dfp.empty:
