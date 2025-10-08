@@ -7,6 +7,31 @@ from sklearn.metrics import mean_absolute_error, r2_score
 import folium
 from streamlit_folium import st_folium
 
+def normalize_real_csv(file_like):
+    import pandas as pd
+    try:
+        df = pd.read_csv(file_like, sep=';', decimal=',', engine='python')
+        if df.shape[1] == 1:
+            file_like.seek(0); df = pd.read_csv(file_like)
+    except Exception:
+        file_like.seek(0); df = pd.read_csv(file_like)
+    df.columns = [str(c).strip() for c in df.columns]
+    time_col = df.columns[0]; val_col = df.columns[1] if len(df.columns)>1 else None
+    if val_col is None: raise ValueError("CSV non valido: servono 2 colonne (timestamp; valore).")
+    df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
+    df = df.dropna(subset=[time_col]).sort_values(time_col)
+    df[val_col] = pd.to_numeric(df[val_col], errors='coerce').fillna(0.0)
+    s = df.set_index(time_col)[val_col].astype(float).rename('kWh_15m')
+    s = s[~s.index.duplicated(keep='first')]
+    idx = pd.date_range(s.index.min(), s.index.max(), freq='15T')
+    s = s.reindex(idx).fillna(0.0)
+    df15 = s.to_frame(); df15['kW_inst'] = df15['kWh_15m'] * 4.0
+    daily = df15['kWh_15m'].resample('D').sum().to_frame('kWh_day'); daily['kW_peak'] = df15['kW_inst'].resample('D').max()
+    return df15, daily
+
+
+
+
 def evaluate_prediction_vs_real(real15, pred15, apply_shift=0):
     import pandas as pd, numpy as np
     pred = pred15.copy()
@@ -35,31 +60,7 @@ st.set_page_config(page_title="ROBOTRONIX – Solar Forecast", layout="wide")
 if "auth" not in st.session_state:
     st.session_state["auth"] = False
 if not st.session_state["auth"]:
-    
-def normalize_real_csv(file_like):
-    import pandas as pd
-    try:
-        df = pd.read_csv(file_like, sep=';', decimal=',', engine='python')
-        if df.shape[1] == 1:
-            file_like.seek(0); df = pd.read_csv(file_like)
-    except Exception:
-        file_like.seek(0); df = pd.read_csv(file_like)
-    df.columns = [str(c).strip() for c in df.columns]
-    time_col = df.columns[0]; val_col = df.columns[1] if len(df.columns)>1 else None
-    if val_col is None: raise ValueError("CSV non valido: servono 2 colonne (timestamp; valore).")
-    df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
-    df = df.dropna(subset=[time_col]).sort_values(time_col)
-    df[val_col] = pd.to_numeric(df[val_col], errors='coerce').fillna(0.0)
-    s = df.set_index(time_col)[val_col].astype(float).rename('kWh_15m')
-    s = s[~s.index.duplicated(keep='first')]
-    idx = pd.date_range(s.index.min(), s.index.max(), freq='15T')
-    s = s.reindex(idx).fillna(0.0)
-    df15 = s.to_frame(); df15['kW_inst'] = df15['kWh_15m'] * 4.0
-    daily = df15['kWh_15m'].resample('D').sum().to_frame('kWh_day'); daily['kW_peak'] = df15['kW_inst'].resample('D').max()
-    return df15, daily
-
-
-st.title("🔐 Accesso richiesto")
+    st.title("🔐 Accesso richiesto")
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
     if st.button("Login"):
@@ -71,6 +72,7 @@ st.title("🔐 Accesso richiesto")
     st.stop()
 
 # ---------------- Config ----------------
+
 DATA_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
 MODEL_PATH = "pv_model.joblib"
 LOG_PATH = "forecast_log.csv"
