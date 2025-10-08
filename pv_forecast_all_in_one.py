@@ -38,7 +38,7 @@ def normalize_real_csv(file_like):
 
 
 
-def evaluate_prediction_vs_real(real15, pred15, apply_shift=0):
+def evaluate_prediction_vs_real(real15, pred15, tz="Europe/Rome", apply_shift=0):
     import pandas as pd, numpy as np
     pred = pred15.copy()
     if 'kWh_15m' in pred.columns: e = pred['kWh_15m']
@@ -61,7 +61,7 @@ def evaluate_prediction_vs_real(real15, pred15, apply_shift=0):
         try:
             if getattr(idx, 'tz', None) is not None:
                 try:
-                    return idx.tz_convert('Europe/Rome').tz_localize(None)
+                    return idx.tz_convert(tz).tz_localize(None)
                 except Exception:
                     return idx.tz_localize(None)
         except Exception:
@@ -319,15 +319,62 @@ st.sidebar.download_button("⬇️ Scarica log filtrato", csv_io.getvalue(), "fo
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa", "✅ Validazione"])
 
+
 with tab1:
+    st.subheader("Storico produzione (kWh)")
+
+    df_hist = df.copy()
+    slope = st.session_state.get("slope", None)
+    intercept = st.session_state.get("intercept", 0.0)
     try:
-        df = load_data()
-        st.subheader("Storico produzione (kWh) e irradianza (W/m²)")
-        if "E_INT_Daily_KWh" in df.columns and "E_INT_Daily_kWh" not in df.columns:
-            df = df.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
-        st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh","G_M0_Wm2"]])
-    except Exception as e:
-        st.error(f"Impossibile caricare dataset: {e}")
+        st.session_state["slope"] = float(slope)
+        st.session_state["intercept"] = float(intercept)
+    except Exception:
+        pass
+
+    # Fallback: prova dal modello se non in sessione
+    if slope is None and "model" in st.session_state:
+        try:
+            slope = float(st.session_state["model"].get("slope", 1.0))
+            intercept = float(st.session_state["model"].get("intercept", 0.0))
+        except Exception:
+            slope, intercept = 1.0, 0.0
+
+    if slope is None:
+        slope, intercept = 1.0, 0.0
+
+    # Irradianza -> kWh equivalenti tramite retta del modello
+    if "G_M0_Wm2" in df_hist.columns:
+        df_hist["Irradianza (kWh eq)"] = (df_hist["G_M0_Wm2"] * float(slope) + float(intercept)).clip(lower=0)
+
+    plot = (
+        df_hist[["time","E_INT_Daily_kWh","Irradianza (kWh eq)"]]
+        .rename(columns={"E_INT_Daily_kWh":"Produzione reale (kWh)"})
+        .dropna(subset=["time"])
+        .copy()
+    )
+    plot["time"] = pd.to_datetime(plot["time"])
+    plot["day_str"] = plot["time"].dt.strftime("%Y-%m-%d")
+
+    long = plot.melt(["time","day_str"], var_name="Serie", value_name="kWh")
+
+    ch = (
+        alt.Chart(long)
+        .mark_line()
+        .encode(
+            x=alt.X("time:T", title="Giorno"),
+            y=alt.Y("kWh:Q", title="kWh (giornalieri)"),
+            color="Serie:N",
+            tooltip=[
+                alt.Tooltip("day_str:N", title="Giorno"),
+                alt.Tooltip("Serie:N"),
+                alt.Tooltip("kWh:Q", title="kWh", format=".0f"),
+            ],
+        )
+        .interactive()
+    )
+    st.altair_chart(ch, use_container_width=True)
+
 
 with tab2:
     c1, c2, c3 = st.columns(3)
@@ -366,7 +413,7 @@ with tab3:
                     dfpp = dfp.copy()
                     dfpp['time'] = pd.to_datetime(dfpp['time'], utc=True, errors='coerce')
                     if hasattr(dfpp['time'].dt, 'tz'):
-                        dfpp['time'] = dfpp['time'].dt.tz_convert('Europe/Rome').dt.tz_localize(None)
+                        dfpp['time'] = dfpp['time'].dt.tz_convert(tz).dt.tz_localize(None)
                     st.session_state['pred_curves'][label] = dfpp
                 except Exception:
                     st.session_state['pred_curves'][label] = dfp
@@ -444,6 +491,8 @@ with tab5:
 
     real_file = st.file_uploader("CSV produzione reale", type=["csv"])
     use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
+    tz_local = st.toggle(\"Usa fuso orario Europe/Rome (altrimenti UTC)\", value=True)
+    tz = \"Europe/Rome\" if tz_local else \"UTC\"
     pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
 
     if real_file is not None:
@@ -465,7 +514,7 @@ with tab5:
 
             if pred_source is not None:
                 lag = st.slider("Shift previsione (multipli di 15 minuti)", -8, 8, 0)
-                metrics, df_eval, df_daily = evaluate_prediction_vs_real(df_real15, pred_source, apply_shift=lag)
+                metrics, df_eval, df_daily = evaluate_prediction_vs_real(df_real15, pred_source, tz=tz, apply_shift=lag)
 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("MAE (kWh / 15m)", f"{metrics['MAE_15m_kWh']:.3f}")
@@ -490,7 +539,7 @@ with tab5:
                 sc = alt.Chart(df_eval.reset_index()).mark_point().encode(
                     x=alt.X('kWh_real:Q', title='Reale (kWh/15m)'),
                     y=alt.Y('kWh_pred:Q', title='Prevista (kWh/15m)'),
-                    tooltip=[alt.Tooltip('time:T', title='Data/ora'), alt.Tooltip('kWh_real:Q'), alt.Tooltip('kWh_pred:Q')]
+                    tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('kWh_real:Q'), alt.Tooltip('kWh_pred:Q')]
                 ).interactive()
                 st.altair_chart(sc, use_container_width=True)
 
