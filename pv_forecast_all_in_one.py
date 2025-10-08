@@ -450,31 +450,31 @@ with tab3:
                     metr3.metric("% della targa", f"{peak_pct:.1f}%")
                     metr4.metric("Nuvolosità media", f"{cloud_mean:.0f}%")
 
-chart_df = dfp.copy()
-chart_df["time"] = pd.to_datetime(chart_df["time"])
-chart_df["time_str"] = chart_df["time"].dt.strftime("%Y-%m-%d %H:%M")
-if "kWh_curve" in chart_df.columns:
-    ycol = "kWh_curve"
-elif "kWh_15m" in chart_df.columns:
-    ycol = "kWh_15m"
-else:
-    # fallback se abbiamo solo kW_inst
-    chart_df["kWh_fallback"] = chart_df.get("kW_inst", 0) / 4.0
-    ycol = "kWh_fallback"
-ch = (
-    alt.Chart(chart_df)
-    .mark_line()
-    .encode(
-        x=alt.X("time:T", title="Data / Ora"),
-        y=alt.Y(f"{ycol}:Q", title="kWh (15m)"),
-        tooltip=[
-            alt.Tooltip("time_str:N", title="Data/ora"),
-            alt.Tooltip(f"{ycol}:Q", title="kWh (15m)", format=".3f"),
-        ],
-    )
-    .interactive()
-)
-st.altair_chart(ch, use_container_width=True)
+                    chart_df = dfp.copy()
+                    chart_df["time"] = pd.to_datetime(chart_df["time"])
+                    chart_df["time_str"] = chart_df["time"].dt.strftime("%Y-%m-%d %H:%M")
+                    if "kWh_curve" in chart_df.columns:
+                        ycol = "kWh_curve"
+                    elif "kWh_15m" in chart_df.columns:
+                        ycol = "kWh_15m"
+                    else:
+                        # fallback se abbiamo solo kW_inst
+                        chart_df["kWh_fallback"] = chart_df.get("kW_inst", 0) / 4.0
+                        ycol = "kWh_fallback"
+                    ch = (
+                        alt.Chart(chart_df)
+                        .mark_line()
+                        .encode(
+                            x=alt.X("time:T", title="Data / Ora"),
+                            y=alt.Y(f"{ycol}:Q", title="kWh (15m)"),
+                            tooltip=[
+                                alt.Tooltip("time_str:N", title="Data/ora"),
+                                alt.Tooltip(f"{ycol}:Q", title="kWh (15m)", format=".3f"),
+                            ],
+                        )
+                        .interactive()
+                    )
+                    st.altair_chart(ch, use_container_width=True)
 
 
                     # Download curva 15-min (per-giorno)
