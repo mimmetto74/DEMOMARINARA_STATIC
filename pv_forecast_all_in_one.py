@@ -320,17 +320,19 @@ st.sidebar.download_button("⬇️ Scarica log filtrato", csv_io.getvalue(), "fo
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa", "✅ Validazione"])
 
 
+
 with tab1:
     st.subheader("Storico produzione (kWh)")
+
+    # Carica i dati storici
+    df0 = load_data()
+    if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
+        df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
+    df = df0.dropna(subset=["E_INT_Daily_kWh","G_M0_Wm2"]).copy()
 
     df_hist = df.copy()
     slope = st.session_state.get("slope", None)
     intercept = st.session_state.get("intercept", 0.0)
-    try:
-        st.session_state["slope"] = float(slope)
-        st.session_state["intercept"] = float(intercept)
-    except Exception:
-        pass
 
     # Fallback: prova dal modello se non in sessione
     if slope is None and "model" in st.session_state:
@@ -348,8 +350,8 @@ with tab1:
         df_hist["Irradianza (kWh eq)"] = (df_hist["G_M0_Wm2"] * float(slope) + float(intercept)).clip(lower=0)
 
     plot = (
-        df_hist[["time","E_INT_Daily_kWh","Irradianza (kWh eq)"]]
-        .rename(columns={"E_INT_Daily_kWh":"Produzione reale (kWh)"})
+        df_hist[["Date","E_INT_Daily_kWh","Irradianza (kWh eq)"]]
+        .rename(columns={"E_INT_Daily_kWh":"Produzione reale (kWh)", "Date": "time"})
         .dropna(subset=["time"])
         .copy()
     )
