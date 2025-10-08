@@ -7,6 +7,28 @@ from sklearn.metrics import mean_absolute_error, r2_score
 import folium
 from streamlit_folium import st_folium
 
+def evaluate_prediction_vs_real(real15, pred15, apply_shift=0):
+    import pandas as pd, numpy as np
+    pred = pred15.copy()
+    if 'kWh_15m' in pred.columns: e = pred['kWh_15m']
+    elif 'kWh_curve' in pred.columns: e = pred['kWh_curve']
+    elif 'kW_inst' in pred.columns: e = pred['kW_inst'] / 4.0
+    else: raise ValueError("Nel dataset previsione manca 'kWh_15m' o 'kWh_curve' (o 'kW_inst').")
+    if apply_shift != 0: e = e.shift(apply_shift)
+    df = real15[['kWh_15m']].rename(columns={'kWh_15m':'kWh_real'}).join(e.rename('kWh_pred'), how='inner')
+    err = df['kWh_pred'] - df['kWh_real']
+    mae = float(err.abs().mean()); rmse = float(np.sqrt(np.mean(err**2))) if len(df) else float('nan')
+    mape = float((err.abs() / df['kWh_real'].replace(0, np.nan)).dropna().mean() * 100.0) if (df['kWh_real']>0).any() else float('nan')
+    r2 = float(np.corrcoef(df['kWh_real'], df['kWh_pred'])[0,1]**2) if len(df) > 1 else float('nan')
+    daily = df.resample('D').sum(); daily['abs_pct_err'] = (daily['kWh_pred'] - daily['kWh_real']).abs() / daily['kWh_real'].replace(0, np.nan) * 100.0
+    metrics = {'n_points_15m': int(len(df)), 'MAE_15m_kWh': mae, 'RMSE_15m_kWh': rmse, 'MAPE_15m_%': mape, 'R2': r2,
+               'MAE_daily_kWh': float((daily['kWh_pred'] - daily['kWh_real']).abs().mean()) if len(daily) else float('nan'),
+               'MAPE_daily_%': float(daily['abs_pct_err'].mean()) if len(daily) else float('nan'),
+               'Energy_real_kWh': float(df['kWh_real'].sum()), 'Energy_pred_kWh': float(df['kWh_pred'].sum())}
+    return metrics, df, daily
+
+
+
 st.set_page_config(page_title="ROBOTRONIX – Solar Forecast", layout="wide")
 
 # ---------------- Auth ----------------
@@ -35,26 +57,6 @@ def normalize_real_csv(file_like):
     df15 = s.to_frame(); df15['kW_inst'] = df15['kWh_15m'] * 4.0
     daily = df15['kWh_15m'].resample('D').sum().to_frame('kWh_day'); daily['kW_peak'] = df15['kW_inst'].resample('D').max()
     return df15, daily
-
-def evaluate_prediction_vs_real(real15, pred15, apply_shift=0):
-    import pandas as pd, numpy as np
-    pred = pred15.copy()
-    if 'kWh_15m' in pred.columns: e = pred['kWh_15m']
-    elif 'kWh_curve' in pred.columns: e = pred['kWh_curve']
-    elif 'kW_inst' in pred.columns: e = pred['kW_inst'] / 4.0
-    else: raise ValueError("Nel dataset previsione manca 'kWh_15m' o 'kWh_curve' (o 'kW_inst').")
-    if apply_shift != 0: e = e.shift(apply_shift)
-    df = real15[['kWh_15m']].rename(columns={'kWh_15m':'kWh_real'}).join(e.rename('kWh_pred'), how='inner')
-    err = df['kWh_pred'] - df['kWh_real']
-    mae = float(err.abs().mean()); rmse = float(np.sqrt(np.mean(err**2))) if len(df) else float('nan')
-    mape = float((err.abs() / df['kWh_real'].replace(0, np.nan)).dropna().mean() * 100.0) if (df['kWh_real']>0).any() else float('nan')
-    r2 = float(np.corrcoef(df['kWh_real'], df['kWh_pred'])[0,1]**2) if len(df) > 1 else float('nan')
-    daily = df.resample('D').sum(); daily['abs_pct_err'] = (daily['kWh_pred'] - daily['kWh_real']).abs() / daily['kWh_real'].replace(0, np.nan) * 100.0
-    metrics = {'n_points_15m': int(len(df)), 'MAE_15m_kWh': mae, 'RMSE_15m_kWh': rmse, 'MAPE_15m_%': mape, 'R2': r2,
-               'MAE_daily_kWh': float((daily['kWh_pred'] - daily['kWh_real']).abs().mean()) if len(daily) else float('nan'),
-               'MAPE_daily_%': float(daily['abs_pct_err'].mean()) if len(daily) else float('nan'),
-               'Energy_real_kWh': float(df['kWh_real'].sum()), 'Energy_pred_kWh': float(df['kWh_pred'].sum())}
-    return metrics, df, daily
 
 
 st.title("🔐 Accesso richiesto")
