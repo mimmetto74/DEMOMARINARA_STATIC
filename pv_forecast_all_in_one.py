@@ -2,6 +2,7 @@ import os, io, requests, joblib
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta, timezone
 import streamlit as st
+import altair as alt
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import folium
