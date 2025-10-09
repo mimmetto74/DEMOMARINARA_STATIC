@@ -375,7 +375,7 @@ with tab1:
     )
     st.altair_chart(ch, use_container_width=True)
     # --- Confronto normalizzato (0–1) per irradianza e produzione ---
-    try:
+    if not plot.empty:
         plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
         plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
         long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
@@ -391,9 +391,8 @@ with tab1:
         )
         st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
         st.altair_chart(ch_norm, use_container_width=True)
-    except Exception as e:
-        st.warning(f'Errore nel confronto normalizzato: {e}')
 
+    
 
 
 with tab2:
@@ -559,7 +558,7 @@ with tab5:
                 ).interactive()
                 st.altair_chart(ch, use_container_width=True)
     # --- Confronto normalizzato (0–1) per irradianza e produzione ---
-    try:
+    if not plot.empty:
         plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
         plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
         long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
@@ -575,9 +574,8 @@ with tab5:
         )
         st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
         st.altair_chart(ch_norm, use_container_width=True)
-    except Exception as e:
-        st.warning(f'Errore nel confronto normalizzato: {e}')
 
+    
 
                 sc = alt.Chart(df_eval.reset_index()).mark_point().encode(
                     x=alt.X('kWh_real:Q', title='Reale (kWh/15m)'),
