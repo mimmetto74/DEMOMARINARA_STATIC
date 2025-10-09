@@ -1,7 +1,20 @@
 import os, io, requests, joblib
 import pandas as pd, numpy as np
+    def _to_naive(idx):
+        try:
+            idx = pd.DatetimeIndex(idx)
+            if getattr(idx, 'tz', None) is not None:
+                try:
+                    idx = idx.tz_convert(tz)
+                except Exception:
+                    pass
+                idx = idx.tz_localize(None)
+        except Exception:
+            return pd.DatetimeIndex(idx)
+        return idx
 from datetime import datetime, timedelta, timezone
 import streamlit as st
+import altair as alt
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import folium
@@ -38,14 +51,29 @@ def normalize_real_csv(file_like):
 
 
 
-def evaluate_prediction_vs_real(real15, pred15, apply_shift=0):
+def evaluate_prediction_vs_real(real15, pred15, tz="Europe/Rome", apply_shift=0):
     import pandas as pd, numpy as np
+    def _to_naive(idx):
+        try:
+            idx = pd.DatetimeIndex(idx)
+            if getattr(idx, 'tz', None) is not None:
+                try:
+                    idx = idx.tz_convert(tz)
+                except Exception:
+                    pass
+                idx = idx.tz_localize(None)
+        except Exception:
+            return pd.DatetimeIndex(idx)
+        return idx
     pred = pred15.copy()
     if 'kWh_15m' in pred.columns: e = pred['kWh_15m']
     elif 'kWh_curve' in pred.columns: e = pred['kWh_curve']
     elif 'kW_inst' in pred.columns: e = pred['kW_inst'] / 4.0
     else: raise ValueError("Nel dataset previsione manca 'kWh_15m' o 'kWh_curve' (o 'kW_inst').")
     if apply_shift != 0: e = e.shift(apply_shift)
+    real15 = real15.copy(); real15.index = _to_naive(real15.index)
+    pred = pred15.copy(); pred.index = _to_naive(pred15.index)
+    e = pred[e.name] if hasattr(e, 'name') else e
     df = real15[['kWh_15m']].rename(columns={'kWh_15m':'kWh_real'}).join(e.rename('kWh_pred'), how='inner')
     err = df['kWh_pred'] - df['kWh_real']
     mae = float(err.abs().mean()); rmse = float(np.sqrt(np.mean(err**2))) if len(df) else float('nan')
@@ -371,7 +399,7 @@ with tab3:
                 except Exception:
                     st.session_state['pred_curves'][label] = dfp
                 st.caption(f"Provider: **{provider}** | Stato: **{status}**")
-                if url: st.code(url, language="text")
+                    # url hidden
                 if dfp is None or dfp.empty:
                     st.warning("Nessun dato disponibile.")
                 else:
@@ -444,6 +472,8 @@ with tab5:
 
     real_file = st.file_uploader("CSV produzione reale", type=["csv"])
     use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
+    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)
+    tz = "Europe/Rome" if tz_local else "UTC"
     pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
 
     if real_file is not None:
@@ -465,7 +495,7 @@ with tab5:
 
             if pred_source is not None:
                 lag = st.slider("Shift previsione (multipli di 15 minuti)", -8, 8, 0)
-                metrics, df_eval, df_daily = evaluate_prediction_vs_real(df_real15, pred_source, apply_shift=lag)
+                metrics, df_eval, df_daily = evaluate_prediction_vs_real(df_real15, pred_source, tz=tz, apply_shift=lag)
 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("MAE (kWh / 15m)", f"{metrics['MAE_15m_kWh']:.3f}")
