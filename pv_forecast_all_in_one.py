@@ -405,7 +405,7 @@ with tab1:
         st.error(f"Errore nel caricamento del log previsioni: {e}")
 
 
-with tab2:with tab2:
+with tab2:
     c1, c2, c3 = st.columns(3)
     if c1.button("Addestra / Riaddestra modello"):
         mae, r2, coef, intercept = train_model()
