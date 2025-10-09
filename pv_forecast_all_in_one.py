@@ -1,20 +1,20 @@
 import os, io, requests, joblib
 import pandas as pd, numpy as np
-    def _to_naive(idx):
-        try:
-            idx = pd.DatetimeIndex(idx)
-            if getattr(idx, 'tz', None) is not None:
-                try:
-                    idx = idx.tz_convert(tz)
-                except Exception:
-                    pass
-                idx = idx.tz_localize(None)
-        except Exception:
-            return pd.DatetimeIndex(idx)
-        return idx
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import altair as alt
+
+def _to_naive(idx, tz="Europe/Rome"):
+    import pandas as pd
+    idx = pd.DatetimeIndex(idx)
+    if getattr(idx, "tz", None) is not None:
+        try:
+            idx = idx.tz_convert(tz)
+        except Exception:
+            pass
+        idx = idx.tz_localize(None)
+    return idx
+
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import folium
@@ -52,19 +52,11 @@ def normalize_real_csv(file_like):
 
 
 def evaluate_prediction_vs_real(real15, pred15, tz="Europe/Rome", apply_shift=0):
+
+    # Normalize indices to tz-naive for safe joins
+    real15 = real15.copy(); real15.index = _to_naive(real15.index, tz)
+    pred15 = pred15.copy(); pred15.index = _to_naive(pred15.index, tz)
     import pandas as pd, numpy as np
-    def _to_naive(idx):
-        try:
-            idx = pd.DatetimeIndex(idx)
-            if getattr(idx, 'tz', None) is not None:
-                try:
-                    idx = idx.tz_convert(tz)
-                except Exception:
-                    pass
-                idx = idx.tz_localize(None)
-        except Exception:
-            return pd.DatetimeIndex(idx)
-        return idx
     pred = pred15.copy()
     if 'kWh_15m' in pred.columns: e = pred['kWh_15m']
     elif 'kWh_curve' in pred.columns: e = pred['kWh_curve']
@@ -437,7 +429,7 @@ with tab3:
             st.line_chart(comp)
 
             # download unico delle 4 curve
-            all_curves = pd.DataFrame()
+    all_curves = pd.DataFrame()
             for lbl, dfp in results.items():
                 if dfp is not None and not dfp.empty:
                     tmp = dfp[["time","GlobalRad_W","CloudCover_P","rad_corr","kWh_curve","kW_inst"]].copy()
