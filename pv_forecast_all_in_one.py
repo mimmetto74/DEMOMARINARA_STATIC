@@ -374,6 +374,26 @@ with tab1:
         .interactive()
     )
     st.altair_chart(ch, use_container_width=True)
+    # --- Confronto normalizzato (0–1) per irradianza e produzione ---
+    try:
+        plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
+        plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
+        long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
+        ch_norm = (
+            alt.Chart(long_norm)
+            .mark_line()
+            .encode(
+                x=alt.X('time:T', title='Giorno'),
+                y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
+                color='Serie:N'
+            )
+            .interactive()
+        )
+        st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
+        st.altair_chart(ch_norm, use_container_width=True)
+    except Exception as e:
+        st.warning(f'Errore nel confronto normalizzato: {e}')
+
 
 
 with tab2:
@@ -525,6 +545,9 @@ with tab5:
                 c5.metric("Energia reale (kWh)", f"{metrics['Energy_real_kWh']:.1f}")
                 c6.metric("Energia prevista (kWh)", f"{metrics['Energy_pred_kWh']:.1f}")
 
+                # --- Validazione estesa (riassunto compatto) ---
+                st.info(f"📊 VALIDAZIONE COMPLETA — RMSE: {metrics['RMSE_15m_kWh']:.3f}, MAE: {metrics['MAE_15m_kWh']:.3f}, R²: {metrics['R2']:.3f}")
+
                 plot = df_eval.reset_index().rename(columns={'index':'time'})
                 plot['time_str'] = plot['time'].dt.strftime('%Y-%m-%d %H:%M')
                 long = plot[['time','time_str','kWh_real','kWh_pred']].melt(['time','time_str'], var_name='Serie', value_name='kWh_15m')
@@ -535,6 +558,26 @@ with tab5:
                     tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('Serie:N'), alt.Tooltip('kWh_15m:Q', title='kWh (15m)', format='.3f')]
                 ).interactive()
                 st.altair_chart(ch, use_container_width=True)
+    # --- Confronto normalizzato (0–1) per irradianza e produzione ---
+    try:
+        plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
+        plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
+        long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
+        ch_norm = (
+            alt.Chart(long_norm)
+            .mark_line()
+            .encode(
+                x=alt.X('time:T', title='Giorno'),
+                y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
+                color='Serie:N'
+            )
+            .interactive()
+        )
+        st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
+        st.altair_chart(ch_norm, use_container_width=True)
+    except Exception as e:
+        st.warning(f'Errore nel confronto normalizzato: {e}')
+
 
                 sc = alt.Chart(df_eval.reset_index()).mark_point().encode(
                     x=alt.X('kWh_real:Q', title='Reale (kWh/15m)'),
@@ -561,9 +604,7 @@ with tab5:
             st.error(f"Errore nel caricamento o confronto: {e}")
 
 
-# ===========================================
-# AGGIUNTE 2025-10-09: Miglioramento confronto e validazione
-# ===========================================
+
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import numpy as np
