@@ -2,7 +2,6 @@ import os, io, requests, joblib
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta, timezone
 import streamlit as st
-import altair as alt
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import folium
@@ -324,33 +323,27 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Storico","🛠️ Modello","🔮 P
 with tab1:
     st.subheader("Storico produzione (kWh)")
 
-    # Carica dati storici
-    df0 = load_data()
-    # normalizza naming colonne attese
-    if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
-        df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
-    if "Date" in df0.columns:
-        df0["time"] = pd.to_datetime(df0["Date"])
-    elif "time" in df0.columns:
-        df0["time"] = pd.to_datetime(df0["time"])
-    else:
-        # fallback: se non c'è, prova indice
-        df0["time"] = pd.to_datetime(df0.index)
-
-    # Recupera slope/intercept dal modello (se presenti) per rendere comparabile l'irradianza
-    slope = st.session_state.get("slope")
+    df_hist = df.copy()
+    slope = st.session_state.get("slope", None)
     intercept = st.session_state.get("intercept", 0.0)
+    try:
+        st.session_state["slope"] = float(slope)
+        st.session_state["intercept"] = float(intercept)
+    except Exception:
+        pass
+
+    # Fallback: prova dal modello se non in sessione
     if slope is None and "model" in st.session_state:
         try:
             slope = float(st.session_state["model"].get("slope", 1.0))
             intercept = float(st.session_state["model"].get("intercept", 0.0))
         except Exception:
             slope, intercept = 1.0, 0.0
+
     if slope is None:
         slope, intercept = 1.0, 0.0
 
-    df_hist = df0.copy()
-    # Crea serie irradianza equivalente in kWh (retta del modello)
+    # Irradianza -> kWh equivalenti tramite retta del modello
     if "G_M0_Wm2" in df_hist.columns:
         df_hist["Irradianza (kWh eq)"] = (df_hist["G_M0_Wm2"] * float(slope) + float(intercept)).clip(lower=0)
 
@@ -360,7 +353,8 @@ with tab1:
         .dropna(subset=["time"])
         .copy()
     )
-    plot["day_str"] = pd.to_datetime(plot["time"]).dt.strftime("%Y-%m-%d")
+    plot["time"] = pd.to_datetime(plot["time"])
+    plot["day_str"] = plot["time"].dt.strftime("%Y-%m-%d")
 
     long = plot.melt(["time","day_str"], var_name="Serie", value_name="kWh")
 
@@ -370,7 +364,7 @@ with tab1:
         .encode(
             x=alt.X("time:T", title="Giorno"),
             y=alt.Y("kWh:Q", title="kWh (giornalieri)"),
-            color=alt.Color("Serie:N", title="Serie"),
+            color="Serie:N",
             tooltip=[
                 alt.Tooltip("day_str:N", title="Giorno"),
                 alt.Tooltip("Serie:N"),
@@ -497,8 +491,8 @@ with tab5:
 
     real_file = st.file_uploader("CSV produzione reale", type=["csv"])
     use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
-    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)
-    tz = "Europe/Rome" if tz_local else "UTC"
+    tz_local = st.toggle(\"Usa fuso orario Europe/Rome (altrimenti UTC)\", value=True)
+    tz = \"Europe/Rome\" if tz_local else \"UTC\"
     pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
 
     if real_file is not None:
@@ -565,3 +559,53 @@ with tab5:
 
         except Exception as e:
             st.error(f"Errore nel caricamento o confronto: {e}")
+
+
+# ===========================================
+# AGGIUNTE 2025-10-09: Miglioramento confronto e validazione
+# ===========================================
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import numpy as np
+
+# Verifica presenza delle colonne necessarie
+if 'irradianza_kWh' in df.columns and 'produzione_kWh' in df.columns:
+    # Normalizzazione per confronto visivo (0-1)
+    df['irr_norm'] = (df['irradianza_kWh'] - df['irradianza_kWh'].min()) / (df['irradianza_kWh'].max() - df['irradianza_kWh'].min())
+    df['prod_norm'] = (df['produzione_kWh'] - df['produzione_kWh'].min()) / (df['produzione_kWh'].max() - df['produzione_kWh'].min())
+
+    plt.figure(figsize=(10,5))
+    plt.plot(df['data'], df['irr_norm'], label='Irradianza (normalizzata)', color='orange')
+    plt.plot(df['data'], df['prod_norm'], label='Produzione reale (normalizzata)', color='blue')
+    plt.legend()
+    plt.title('Confronto normalizzato: Irradianza vs Produzione reale')
+    plt.xlabel('Data')
+    plt.ylabel('Valore normalizzato')
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+# Calcolo metriche di validazione se presenti previsioni
+if 'produzione_prevista' in df.columns and 'produzione_kWh' in df.columns:
+    y_true = df['produzione_kWh']
+    y_pred = df['produzione_prevista']
+
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mae = mean_absolute_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+
+    print("\n📊 VALIDAZIONE MODELLO AGGIORNATA")
+    print(f"RMSE: {rmse:.2f} kWh")
+    print(f"MAE: {mae:.2f} kWh")
+    print(f"R²: {r2:.3f}\n")
+
+    plt.figure(figsize=(7,7))
+    plt.scatter(y_true, y_pred, alpha=0.4, label='Predizioni vs Reale')
+    max_val = max(max(y_true), max(y_pred))
+    plt.plot([0, max_val], [0, max_val], 'r--', label='Ideale (y=x)')
+    plt.xlabel('Produzione reale (kWh)')
+    plt.ylabel('Produzione prevista (kWh)')
+    plt.title('Validazione modello – Confronto Predizione vs Reale')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+# ===========================================
