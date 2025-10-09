@@ -369,7 +369,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Storico","🛠️ Modello","🔮 P
 with tab1:
     st.subheader("Storico produzione (kWh)")
 
-    df_hist = df.copy()
+    df_hist = log_df.copy()
     slope = st.session_state.get("slope", None)
     intercept = st.session_state.get("intercept", 0.0)
     try:
