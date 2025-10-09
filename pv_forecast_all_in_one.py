@@ -537,7 +537,7 @@ with tab5:
 
     real_file = st.file_uploader("CSV produzione reale", type=["csv"])
     use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
-    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)\", value=True)
+    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)", value=True)\", value=True)
     tz = \"Europe/Rome\" if tz_local else \"UTC\"
     pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
 
