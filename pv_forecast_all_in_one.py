@@ -366,63 +366,46 @@ st.sidebar.download_button("⬇️ Scarica log filtrato", csv_io.getvalue(), "fo
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa", "✅ Validazione"])
 
 
+
 with tab1:
-    st.subheader("Storico produzione (kWh)")
+    st.subheader("📊 Storico produzione (kWh)")
 
-    df_hist = log_df.copy()
-    slope = st.session_state.get("slope", None)
-    intercept = st.session_state.get("intercept", 0.0)
+    # --- Sezione 1: Produzione reale ---
+    st.markdown("### ⚡ Produzione Reale Giornaliera")
     try:
-        st.session_state["slope"] = float(slope)
-        st.session_state["intercept"] = float(intercept)
-    except Exception:
-        pass
+        df_prod = pd.read_csv("Dataset_Daily_EnergiaSeparata_2020_2025.csv")
+        # Rinomina coerente se necessario
+        if "Date" in df_prod.columns:
+            df_prod["Date"] = pd.to_datetime(df_prod["Date"], errors="coerce")
+        if "E_INT_Daily_KWh" in df_prod.columns:
+            df_prod = df_prod.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
+        st.dataframe(df_prod[["Date", "E_INT_Daily_kWh", "G_M0_Wm2"]].tail(100))
+        st.info(f"Totale righe: {len(df_prod)} — Ultima data: {df_prod['Date'].max().date()}")
+    except Exception as e:
+        st.error(f"Errore nel caricamento del dataset di produzione: {e}")
 
-    # Fallback: prova dal modello se non in sessione
-    if slope is None and "model" in st.session_state:
-        try:
-            slope = float(st.session_state["model"].get("slope", 1.0))
-            intercept = float(st.session_state["model"].get("intercept", 0.0))
-        except Exception:
-            slope, intercept = 1.0, 0.0
+    st.markdown("---")
 
-    if slope is None:
-        slope, intercept = 1.0, 0.0
+    # --- Sezione 2: Log previsioni ---
+    st.markdown("### 🧭 Log Previsioni (Meteomatics / Open-Meteo)")
+    try:
+        log_df = pd.read_csv(LOG_PATH)
+        flt = st.selectbox("Filtro log", ["Tutti", "Solo Meteomatics", "Solo Open-Meteo", "Solo Errori"])
 
-    # Irradianza -> kWh equivalenti tramite retta del modello
-    if "G_M0_Wm2" in df_hist.columns:
-        df_hist["Irradianza (kWh eq)"] = (df_hist["G_M0_Wm2"] * float(slope) + float(intercept)).clip(lower=0)
+        if flt == "Solo Meteomatics":
+            log_df = log_df[log_df["provider"] == "Meteomatics"]
+        elif flt == "Solo Open-Meteo":
+            log_df = log_df[log_df["provider"] == "Open-Meteo"]
+        elif flt == "Solo Errori":
+            log_df = log_df[log_df["status"].astype(str).str.startswith("ERROR", na=False)]
 
-    plot = (
-        df_hist[["time","E_INT_Daily_kWh","Irradianza (kWh eq)"]]
-        .rename(columns={"E_INT_Daily_kWh":"Produzione reale (kWh)"})
-        .dropna(subset=["time"])
-        .copy()
-    )
-    plot["time"] = pd.to_datetime(plot["time"])
-    plot["day_str"] = plot["time"].dt.strftime("%Y-%m-%d")
-
-    long = plot.melt(["time","day_str"], var_name="Serie", value_name="kWh")
-
-    ch = (
-        alt.Chart(long)
-        .mark_line()
-        .encode(
-            x=alt.X("time:T", title="Giorno"),
-            y=alt.Y("kWh:Q", title="kWh (giornalieri)"),
-            color="Serie:N",
-            tooltip=[
-                alt.Tooltip("day_str:N", title="Giorno"),
-                alt.Tooltip("Serie:N"),
-                alt.Tooltip("kWh:Q", title="kWh", format=".0f"),
-            ],
-        )
-        .interactive()
-    )
-    st.altair_chart(ch, use_container_width=True)
+        st.dataframe(log_df[["timestamp", "provider", "status", "message"]].tail(200))
+        st.info(f"Totale righe log: {len(log_df)}")
+    except Exception as e:
+        st.error(f"Errore nel caricamento del log previsioni: {e}")
 
 
-with tab2:
+with tab2:with tab2:
     c1, c2, c3 = st.columns(3)
     if c1.button("Addestra / Riaddestra modello"):
         mae, r2, coef, intercept = train_model()
@@ -537,8 +520,8 @@ with tab5:
 
     real_file = st.file_uploader("CSV produzione reale", type=["csv"])
     use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
-    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)
-    tz = "Europe/Rome" if tz_local else "UTC"
+tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)
+tz = "Europe/Rome" if tz_local else "UTC"
     pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
 
     if real_file is not None:
