@@ -140,26 +140,72 @@ def write_log(**row):
 def load_data():
     return pd.read_csv(DATA_PATH, parse_dates=["Date"])
 
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import mean_absolute_error, r2_score
+import joblib
+
 def train_model():
     df0 = load_data()
+
+    # Normalizzazione nomi colonne
     if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
-        df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
-    df = df0.dropna(subset=["E_INT_Daily_kWh","G_M0_Wm2"])
+        df0 = df0.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
+
+    # Pulizia dati
+    df = df0.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
     if df.empty:
         return float("nan"), float("nan"), None, None
+
+    # ---------------- FEATURE ENGINEERING ----------------
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["dayofyear"] = df["Date"].dt.dayofyear
+        df["month"] = df["Date"].dt.month
+    else:
+        df["dayofyear"] = np.arange(len(df)) % 365
+        df["month"] = ((np.arange(len(df)) % 365) // 30) + 1
+
+    # CloudCover inversa e radiazione corretta
+    if "CloudCover_P" in df.columns:
+        df["cloud_inv"] = 100 - df["CloudCover_P"]
+        df["rad_eff"] = df["G_M0_Wm2"] * (df["cloud_inv"] / 100.0)
+    else:
+        df["cloud_inv"] = 100.0
+        df["rad_eff"] = df["G_M0_Wm2"]
+
+    # ---------------- DATASET E MODELLO ----------------
+    features = ["G_M0_Wm2", "rad_eff", "cloud_inv", "dayofyear", "month"]
+    target = "E_INT_Daily_kWh"
+
     train = df[df["Date"] < "2025-01-01"]
-    test  = df[df["Date"] >= "2025-01-01"]
-    X_train, y_train = train[["G_M0_Wm2"]], train["E_INT_Daily_kWh"]
-    model = LinearRegression().fit(X_train, y_train)
+    test = df[df["Date"] >= "2025-01-01"]
+    X_train, y_train = train[features], train[target]
+    X_test, y_test = test[features], test[target]
+
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("rf", RandomForestRegressor(
+            n_estimators=300,
+            max_depth=12,
+            random_state=42,
+            n_jobs=-1
+        ))
+    ])
+
+    model.fit(X_train, y_train)
     joblib.dump(model, MODEL_PATH)
-    mae = r2 = float("nan")
-    if len(test) > 0:
-        y_pred = model.predict(test[["G_M0_Wm2"]])
-        mae = float(mean_absolute_error(test["E_INT_Daily_kWh"], y_pred))
-        r2  = float(r2_score(test["E_INT_Daily_kWh"], y_pred))
-    coef = float(model.coef_[0]) if hasattr(model, "coef_") else None
-    intercept = float(model.intercept_) if hasattr(model, "intercept_") else None
-    return mae, r2, coef, intercept
+
+    if len(X_test) > 0:
+        y_pred = model.predict(X_test)
+        mae = float(mean_absolute_error(y_test, y_pred))
+        r2 = float(r2_score(y_test, y_pred))
+    else:
+        mae, r2 = float("nan"), float("nan")
+
+    st.info(f"✅ Modello RandomForest addestrato — MAE={mae:.2f} kWh, R²={r2:.3f}")
+    return mae, r2, model.named_steps["rf"].feature_importances_.tolist(), features
 
 def load_model():
     if not os.path.exists(MODEL_PATH):
@@ -491,8 +537,8 @@ with tab5:
 
     real_file = st.file_uploader("CSV produzione reale", type=["csv"])
     use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
-    tz_local = st.toggle(\"Usa fuso orario Europe/Rome (altrimenti UTC)\", value=True)
-    tz = \"Europe/Rome\" if tz_local else \"UTC\"
+    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)
+    tz = "Europe/Rome" if tz_local else "UTC"
     pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
 
     if real_file is not None:

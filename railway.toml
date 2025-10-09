@@ -1,0 +1,8 @@
+[build]
+builder = "paketobuildpacks/builder:base"
+
+[env]
+PYTHON_VERSION = "3.11.6"
+
+[start]
+cmd = "streamlit run pv_forecast_all_in_one.py --server.port $PORT --server.address 0.0.0.0"
