@@ -374,23 +374,25 @@ with tab1:
         .interactive()
     )
     st.altair_chart(ch, use_container_width=True)
-    # --- Confronto normalizzato (0–1) per irradianza e produzione ---
-    if not plot.empty:
-        plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
-        plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
-        long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
-        ch_norm = (
-            alt.Chart(long_norm)
-            .mark_line()
-            .encode(
-                x=alt.X('time:T', title='Giorno'),
-                y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
-                color='Serie:N'
-            )
-            .interactive()
+
+# --- Confronto normalizzato (0–1) per irradianza e produzione ---
+if 'Irradianza (kWh eq)' in plot.columns and 'Produzione reale (kWh)' in plot.columns:
+    plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
+    plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
+    long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
+    ch_norm = (
+        alt.Chart(long_norm)
+        .mark_line()
+        .encode(
+            x=alt.X('time:T', title='Giorno'),
+            y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
+            color='Serie:N'
         )
-        st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
-        st.altair_chart(ch_norm, use_container_width=True)
+        .interactive()
+    )
+    st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
+    st.altair_chart(ch_norm, use_container_width=True)
+
 
     
 
@@ -557,23 +559,25 @@ with tab5:
                     tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('Serie:N'), alt.Tooltip('kWh_15m:Q', title='kWh (15m)', format='.3f')]
                 ).interactive()
                 st.altair_chart(ch, use_container_width=True)
-    # --- Confronto normalizzato (0–1) per irradianza e produzione ---
-    if not plot.empty:
-        plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
-        plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
-        long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
-        ch_norm = (
-            alt.Chart(long_norm)
-            .mark_line()
-            .encode(
-                x=alt.X('time:T', title='Giorno'),
-                y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
-                color='Serie:N'
-            )
-            .interactive()
+
+# --- Confronto normalizzato (0–1) per irradianza e produzione ---
+if 'Irradianza (kWh eq)' in plot.columns and 'Produzione reale (kWh)' in plot.columns:
+    plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
+    plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
+    long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
+    ch_norm = (
+        alt.Chart(long_norm)
+        .mark_line()
+        .encode(
+            x=alt.X('time:T', title='Giorno'),
+            y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
+            color='Serie:N'
         )
-        st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
-        st.altair_chart(ch_norm, use_container_width=True)
+        .interactive()
+    )
+    st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
+    st.altair_chart(ch_norm, use_container_width=True)
+
 
     
 
