@@ -375,27 +375,6 @@ with tab1:
     )
     st.altair_chart(ch, use_container_width=True)
 
-# --- Confronto normalizzato (0–1) per irradianza e produzione ---
-if 'Irradianza (kWh eq)' in plot.columns and 'Produzione reale (kWh)' in plot.columns:
-    plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
-    plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
-    long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
-    ch_norm = (
-        alt.Chart(long_norm)
-        .mark_line()
-        .encode(
-            x=alt.X('time:T', title='Giorno'),
-            y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
-            color='Serie:N'
-        )
-        .interactive()
-    )
-    st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
-    st.altair_chart(ch_norm, use_container_width=True)
-
-
-    
-
 
 with tab2:
     c1, c2, c3 = st.columns(3)
@@ -512,8 +491,8 @@ with tab5:
 
     real_file = st.file_uploader("CSV produzione reale", type=["csv"])
     use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
-    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)
-    tz = "Europe/Rome" if tz_local else "UTC"
+    tz_local = st.toggle(\"Usa fuso orario Europe/Rome (altrimenti UTC)\", value=True)
+    tz = \"Europe/Rome\" if tz_local else \"UTC\"
     pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
 
     if real_file is not None:
@@ -546,9 +525,6 @@ with tab5:
                 c5.metric("Energia reale (kWh)", f"{metrics['Energy_real_kWh']:.1f}")
                 c6.metric("Energia prevista (kWh)", f"{metrics['Energy_pred_kWh']:.1f}")
 
-                # --- Validazione estesa (riassunto compatto) ---
-                st.info(f"📊 VALIDAZIONE COMPLETA — RMSE: {metrics['RMSE_15m_kWh']:.3f}, MAE: {metrics['MAE_15m_kWh']:.3f}, R²: {metrics['R2']:.3f}")
-
                 plot = df_eval.reset_index().rename(columns={'index':'time'})
                 plot['time_str'] = plot['time'].dt.strftime('%Y-%m-%d %H:%M')
                 long = plot[['time','time_str','kWh_real','kWh_pred']].melt(['time','time_str'], var_name='Serie', value_name='kWh_15m')
@@ -559,27 +535,6 @@ with tab5:
                     tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('Serie:N'), alt.Tooltip('kWh_15m:Q', title='kWh (15m)', format='.3f')]
                 ).interactive()
                 st.altair_chart(ch, use_container_width=True)
-
-# --- Confronto normalizzato (0–1) per irradianza e produzione ---
-if 'Irradianza (kWh eq)' in plot.columns and 'Produzione reale (kWh)' in plot.columns:
-    plot['Irr_norm'] = (plot['Irradianza (kWh eq)'] - plot['Irradianza (kWh eq)'].min()) / (plot['Irradianza (kWh eq)'].max() - plot['Irradianza (kWh eq)'].min())
-    plot['Prod_norm'] = (plot['Produzione reale (kWh)'] - plot['Produzione reale (kWh)'].min()) / (plot['Produzione reale (kWh)'].max() - plot['Produzione reale (kWh)'].min())
-    long_norm = plot.melt(['time'], var_name='Serie', value_name='Valore')
-    ch_norm = (
-        alt.Chart(long_norm)
-        .mark_line()
-        .encode(
-            x=alt.X('time:T', title='Giorno'),
-            y=alt.Y('Valore:Q', title='Valore normalizzato (0–1)'),
-            color='Serie:N'
-        )
-        .interactive()
-    )
-    st.markdown('### 🔁 Confronto normalizzato (Irradianza vs Produzione)')
-    st.altair_chart(ch_norm, use_container_width=True)
-
-
-    
 
                 sc = alt.Chart(df_eval.reset_index()).mark_point().encode(
                     x=alt.X('kWh_real:Q', title='Reale (kWh/15m)'),
@@ -604,51 +559,3 @@ if 'Irradianza (kWh eq)' in plot.columns and 'Produzione reale (kWh)' in plot.co
 
         except Exception as e:
             st.error(f"Errore nel caricamento o confronto: {e}")
-
-
-
-import matplotlib.pyplot as plt
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import numpy as np
-
-# Verifica presenza delle colonne necessarie
-if 'irradianza_kWh' in df.columns and 'produzione_kWh' in df.columns:
-    # Normalizzazione per confronto visivo (0-1)
-    df['irr_norm'] = (df['irradianza_kWh'] - df['irradianza_kWh'].min()) / (df['irradianza_kWh'].max() - df['irradianza_kWh'].min())
-    df['prod_norm'] = (df['produzione_kWh'] - df['produzione_kWh'].min()) / (df['produzione_kWh'].max() - df['produzione_kWh'].min())
-
-    plt.figure(figsize=(10,5))
-    plt.plot(df['data'], df['irr_norm'], label='Irradianza (normalizzata)', color='orange')
-    plt.plot(df['data'], df['prod_norm'], label='Produzione reale (normalizzata)', color='blue')
-    plt.legend()
-    plt.title('Confronto normalizzato: Irradianza vs Produzione reale')
-    plt.xlabel('Data')
-    plt.ylabel('Valore normalizzato')
-    plt.grid(True, alpha=0.3)
-    plt.show()
-
-# Calcolo metriche di validazione se presenti previsioni
-if 'produzione_prevista' in df.columns and 'produzione_kWh' in df.columns:
-    y_true = df['produzione_kWh']
-    y_pred = df['produzione_prevista']
-
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    mae = mean_absolute_error(y_true, y_pred)
-    r2 = r2_score(y_true, y_pred)
-
-    print("\n📊 VALIDAZIONE MODELLO AGGIORNATA")
-    print(f"RMSE: {rmse:.2f} kWh")
-    print(f"MAE: {mae:.2f} kWh")
-    print(f"R²: {r2:.3f}\n")
-
-    plt.figure(figsize=(7,7))
-    plt.scatter(y_true, y_pred, alpha=0.4, label='Predizioni vs Reale')
-    max_val = max(max(y_true), max(y_pred))
-    plt.plot([0, max_val], [0, max_val], 'r--', label='Ideale (y=x)')
-    plt.xlabel('Produzione reale (kWh)')
-    plt.ylabel('Produzione prevista (kWh)')
-    plt.title('Validazione modello – Confronto Predizione vs Reale')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show()
-# ===========================================
