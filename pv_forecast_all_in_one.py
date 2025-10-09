@@ -7,6 +7,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import folium
 from streamlit_folium import st_folium
+import altair as alt
 
 def normalize_real_csv(file_like):
     import pandas as pd
@@ -289,12 +290,27 @@ def compute_curve_and_daily(df, model, plant_kw):
     df["GlobalRad_W"] = df["GlobalRad_W"].clip(lower=0)
     df["CloudCover_P"] = df["CloudCover_P"].clip(lower=0, upper=100)
     df["rad_corr"] = df["GlobalRad_W"] * (1 - df["CloudCover_P"]/100.0)
+
+    # Data del giorno (prima riga)
+    try:
+        day_dt = pd.to_datetime(df["time"]).dt.date.iloc[0]
+    except Exception:
+        day_dt = pd.Timestamp.utcnow().date()
+
+    # Predizione giornaliera con 5 feature coerenti col modello
+    try:
+        X_day = build_daily_feature_row(df, day_dt)
+        pred_kwh = float(model.predict(X_day)[0]) if len(X_day) else 0.0
+    except Exception:
+        pred_kwh = 0.0
+
+    # Ripartizione della curva 15-min proporzionale alla radiazione corretta
     sum_rad = df["rad_corr"].sum()
-    pred_kwh = float(model.predict([[sum_rad]])[0]) if sum_rad > 0 else 0.0
     if sum_rad > 0:
-        df["kWh_curve"] = pred_kwh * (df["rad_corr"]/sum_rad)
+        df["kWh_curve"] = pred_kwh * (df["rad_corr"] / sum_rad)
     else:
         df["kWh_curve"] = 0.0
+
     df["kW_inst"] = df["kWh_curve"] * 4.0
     peak_kW = float(df["kW_inst"].max()) if len(df) else 0.0
     peak_pct = float(peak_kW/plant_kw*100.0) if plant_kw > 0 else 0.0
@@ -431,18 +447,25 @@ with tab1:
 
 
 with tab2:
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns([2, 1])
     if c1.button("Addestra / Riaddestra modello"):
-        mae, r2, coef, intercept = train_model()
+        mae, r2, importances, feat_names = train_model()
         st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
-        if coef is not None and intercept is not None:
-            st.info(f"**Slope**: {coef:.6f}  |  **Intercept**: {intercept:.3f}")
+        if importances is not None and feat_names is not None:
+            fig, ax = plt.subplots(figsize=(6, 3))
+            ax.barh(feat_names, importances)
+            ax.set_xlabel("Importanza")
+            ax.set_title("Feature importance (RandomForest)")
+            st.pyplot(fig)
     if os.path.exists(MODEL_PATH):
-        model = load_model()
         try:
-            coef = float(model.coef_[0]); intercept = float(model.intercept_)
-            c2.metric("Slope (kWh per unità irradianza)", f"{coef:.6f}")
-            c3.metric("Intercept", f"{intercept:.3f}")
+            model = load_model()
+            if hasattr(model, "named_steps") and "rf" in model.named_steps:
+                imps = model.named_steps["rf"].feature_importances_
+                names = ["G_M0_Wm2","rad_eff","cloud_inv","dayofyear","month"]
+                c2.markdown("**Importanza feature (modello attuale)**")
+                for n, v in zip(names, imps):
+                    c2.write(f"- {n}: {v:.3f}")
         except Exception:
             pass
 
