@@ -1,4 +1,5 @@
 import os, io, requests, joblib
+import matplotlib.pyplot as plt
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta, timezone
 import streamlit as st
@@ -35,6 +36,30 @@ def normalize_real_csv(file_like):
     daily = df15['kWh_15m'].resample('D').sum().to_frame('kWh_day'); daily['kW_peak'] = df15['kW_inst'].resample('D').max()
     return df15, daily
 
+def build_daily_feature_row(df15, day_dt):
+    """
+    df15: dataframe a 15 min con colonne 'GlobalRad_W' (W/m2) e 'CloudCover_P' (0..100)
+    day_dt: datetime.date del giorno da stimare
+    Ritorna un DataFrame 1x5 con le feature nell'ordine atteso dal modello.
+    """
+    # radiazione giornaliera in kWh/m2:
+    # somma(W/m2 * 0.25 h) / 1000 -> kWh/m2
+    rad_kwh_m2 = float((df15["GlobalRad_W"].fillna(0) * 0.25).sum() / 1000.0)
+
+    cloud_mean = float(df15["CloudCover_P"].mean()) if "CloudCover_P" in df15.columns else 0.0
+    cloud_inv  = 100.0 - cloud_mean
+    dayofyear  = int(pd.Timestamp(day_dt).dayofyear)
+    month      = int(pd.Timestamp(day_dt).month)
+    rad_eff    = rad_kwh_m2 * (cloud_inv / 100.0)
+
+    X = pd.DataFrame([{
+        "G_M0_Wm2":  rad_kwh_m2,
+        "rad_eff":   rad_eff,
+        "cloud_inv": cloud_inv,
+        "dayofyear": dayofyear,
+        "month":     month
+    }])
+    return X[["G_M0_Wm2", "rad_eff", "cloud_inv", "dayofyear", "month"]]
 
 
 
@@ -370,39 +395,39 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Storico","🛠️ Modello","🔮 P
 with tab1:
     st.subheader("📊 Storico produzione (kWh)")
 
-    # --- Sezione 1: Produzione reale ---
-    st.markdown("### ⚡ Produzione Reale Giornaliera")
     try:
         df_prod = pd.read_csv("Dataset_Daily_EnergiaSeparata_2020_2025.csv")
-        # Rinomina coerente se necessario
-        if "Date" in df_prod.columns:
-            df_prod["Date"] = pd.to_datetime(df_prod["Date"], errors="coerce")
+
+        # normalizza nomi e date
         if "E_INT_Daily_KWh" in df_prod.columns:
             df_prod = df_prod.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
-        st.dataframe(df_prod[["Date", "E_INT_Daily_kWh", "G_M0_Wm2"]].tail(100))
-        st.info(f"Totale righe: {len(df_prod)} — Ultima data: {df_prod['Date'].max().date()}")
+        if "Date" in df_prod.columns:
+            df_prod["Date"] = pd.to_datetime(df_prod["Date"], errors="coerce")
+
+        # (opzionale) rolling 7g per linea più “pulita”
+        df_plot = df_prod[["Date", "E_INT_Daily_kWh", "G_M0_Wm2"]].dropna().copy()
+        df_plot = df_plot.sort_values("Date")
+        df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7, min_periods=1).mean()
+        df_plot["G_M0_Wm2_7d"]      = df_plot["G_M0_Wm2"].rolling(7, min_periods=1).mean()
+
+        # grafico: energia (asse sinistro) + irradianza (asse destro)
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.plot(df_plot["Date"], df_plot["E_INT_Daily_kWh_7d"], label="Energia giornaliera (kWh)")
+        ax.set_ylabel("Energia (kWh)")
+        ax.set_xlabel("Data")
+
+        ax2 = ax.twinx()
+        ax2.plot(df_plot["Date"], df_plot["G_M0_Wm2_7d"], linestyle="--", label="Irradianza (kWh/m²)")
+        ax2.set_ylabel("Irradianza (kWh/m²)")
+
+        ax.set_title("Produzione reale + irradianza (media mobile 7 giorni)")
+        fig.tight_layout()
+        st.pyplot(fig)
+
+        st.caption(f"Totale righe: {len(df_prod)} — Ultima data: {pd.to_datetime(df_prod['Date']).max().date()}")
     except Exception as e:
-        st.error(f"Errore nel caricamento del dataset di produzione: {e}")
-
-    st.markdown("---")
-
-    # --- Sezione 2: Log previsioni ---
-    st.markdown("### 🧭 Log Previsioni (Meteomatics / Open-Meteo)")
-    try:
-        log_df = pd.read_csv(LOG_PATH)
-        flt = st.selectbox("Filtro log", ["Tutti", "Solo Meteomatics", "Solo Open-Meteo", "Solo Errori"])
-
-        if flt == "Solo Meteomatics":
-            log_df = log_df[log_df["provider"] == "Meteomatics"]
-        elif flt == "Solo Open-Meteo":
-            log_df = log_df[log_df["provider"] == "Open-Meteo"]
-        elif flt == "Solo Errori":
-            log_df = log_df[log_df["status"].astype(str).str.startswith("ERROR", na=False)]
-
-        st.dataframe(log_df[["timestamp", "provider", "status", "message"]].tail(200))
-        st.info(f"Totale righe log: {len(log_df)}")
-    except Exception as e:
-        st.error(f"Errore nel caricamento del log previsioni: {e}")
+        st.error(f"Errore nel caricamento/plot dei dati storici: {e}")
 
 
 with tab2:
