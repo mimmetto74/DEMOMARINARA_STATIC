@@ -440,18 +440,47 @@ with tab1:
 
         # grafico: energia (asse sinistro) + irradianza (asse destro)
         import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(9, 4))
-        ax.plot(df_plot["Date"], df_plot["E_INT_Daily_kWh_7d"], label="Energia giornaliera (kWh)")
-        ax.set_ylabel("Energia (kWh)")
-        ax.set_xlabel("Data")
+        fig, ax = 
+import plotly.graph_objects as go
 
-        ax2 = ax.twinx()
-        ax2.plot(df_plot["Date"], df_plot["G_M0_Wm2_7d"], linestyle="--", label="Irradianza (kWh/m²)")
-        ax2.set_ylabel("Irradianza (kWh/m²)")
+# Media mobile 7 giorni
+df_plot = df_real_daily.copy()
+df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7).mean()
+df_plot["G_M0_Wm2_7d"] = df_plot["G_M0_Wm2"].rolling(7).mean()
 
-        ax.set_title("Produzione reale + irradianza (media mobile 7 giorni)")
-        fig.tight_layout()
-        st.pyplot(fig)
+fig = go.Figure()
+
+# Produzione reale
+fig.add_trace(go.Scatter(
+    x=df_plot.index,
+    y=df_plot["E_INT_Daily_kWh_7d"],
+    mode="lines",
+    name="Produzione (kWh)",
+    line=dict(color="#00BFFF", width=2)
+))
+
+# Irradianza (asse secondario)
+fig.add_trace(go.Scatter(
+    x=df_plot.index,
+    y=df_plot["G_M0_Wm2_7d"],
+    mode="lines",
+    name="Irradianza (kWh/m²)",
+    line=dict(color="#FFA500", width=2, dash="dot"),
+    yaxis="y2"
+))
+
+fig.update_layout(
+    title="Produzione reale + Irradianza (media mobile 7 giorni)",
+    xaxis=dict(title="Data"),
+    yaxis=dict(title="Energia (kWh)"),
+    yaxis2=dict(title="Irradianza (kWh/m²)", overlaying="y", side="right"),
+    hovermode="x unified",
+    template="plotly_dark",
+    margin=dict(l=50, r=50, t=50, b=50)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
 
         st.caption(f"Totale righe: {len(df_prod)} — Ultima data: {pd.to_datetime(df_prod['Date']).max().date()}")
     except Exception as e:
@@ -464,11 +493,47 @@ with tab2:
         mae, r2, importances, feat_names = train_model()
         st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
         if importances is not None and feat_names is not None:
-            fig, ax = plt.subplots(figsize=(6, 3))
-            ax.barh(feat_names, importances)
-            ax.set_xlabel("Importanza")
-            ax.set_title("Feature importance (RandomForest)")
-            st.pyplot(fig)
+            fig, ax = 
+import plotly.graph_objects as go
+
+# Media mobile 7 giorni
+df_plot = df_real_daily.copy()
+df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7).mean()
+df_plot["G_M0_Wm2_7d"] = df_plot["G_M0_Wm2"].rolling(7).mean()
+
+fig = go.Figure()
+
+# Produzione reale
+fig.add_trace(go.Scatter(
+    x=df_plot.index,
+    y=df_plot["E_INT_Daily_kWh_7d"],
+    mode="lines",
+    name="Produzione (kWh)",
+    line=dict(color="#00BFFF", width=2)
+))
+
+# Irradianza (asse secondario)
+fig.add_trace(go.Scatter(
+    x=df_plot.index,
+    y=df_plot["G_M0_Wm2_7d"],
+    mode="lines",
+    name="Irradianza (kWh/m²)",
+    line=dict(color="#FFA500", width=2, dash="dot"),
+    yaxis="y2"
+))
+
+fig.update_layout(
+    title="Produzione reale + Irradianza (media mobile 7 giorni)",
+    xaxis=dict(title="Data"),
+    yaxis=dict(title="Energia (kWh)"),
+    yaxis2=dict(title="Irradianza (kWh/m²)", overlaying="y", side="right"),
+    hovermode="x unified",
+    template="plotly_dark",
+    margin=dict(l=50, r=50, t=50, b=50)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
     if os.path.exists(MODEL_PATH):
         try:
             model = load_model()
