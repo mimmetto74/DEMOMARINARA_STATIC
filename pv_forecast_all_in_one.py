@@ -172,11 +172,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, r2_score
 import joblib
 
-
 def train_model():
     df0 = load_data()
 
-    # Normalizza nome colonna energia
+    # Normalizzazione nomi colonne
     if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
         df0 = df0.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
 
@@ -185,13 +184,7 @@ def train_model():
     if df.empty:
         return float("nan"), float("nan"), None, None
 
-    # Potenza nominale (kWp) reale del tuo impianto
-    plant_kw = 947.52
-
-    # Crea la colonna normalizzata
-    df["E_SPEC_kWh_per_kWp"] = df["E_INT_Daily_kWh"] / plant_kw
-
-    # Feature engineering
+    # ---------------- FEATURE ENGINEERING ----------------
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df["dayofyear"] = df["Date"].dt.dayofyear
@@ -200,6 +193,7 @@ def train_model():
         df["dayofyear"] = np.arange(len(df)) % 365
         df["month"] = ((np.arange(len(df)) % 365) // 30) + 1
 
+    # CloudCover inversa e radiazione corretta
     if "CloudCover_P" in df.columns:
         df["cloud_inv"] = 100 - df["CloudCover_P"]
         df["rad_eff"] = df["G_M0_Wm2"] * (df["cloud_inv"] / 100.0)
@@ -207,19 +201,14 @@ def train_model():
         df["cloud_inv"] = 100.0
         df["rad_eff"] = df["G_M0_Wm2"]
 
+    # ---------------- DATASET E MODELLO ----------------
     features = ["G_M0_Wm2", "rad_eff", "cloud_inv", "dayofyear", "month"]
-    target = "E_SPEC_kWh_per_kWp"
+    target = "E_INT_Daily_kWh"
 
     train = df[df["Date"] < "2025-01-01"]
     test = df[df["Date"] >= "2025-01-01"]
     X_train, y_train = train[features], train[target]
     X_test, y_test = test[features], test[target]
-
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import mean_absolute_error, r2_score
-    import joblib
 
     model = Pipeline([
         ("scaler", StandardScaler()),
@@ -234,7 +223,6 @@ def train_model():
     model.fit(X_train, y_train)
     joblib.dump(model, MODEL_PATH)
 
-    # Valutazione
     if len(X_test) > 0:
         y_pred = model.predict(X_test)
         mae = float(mean_absolute_error(y_test, y_pred))
@@ -242,7 +230,7 @@ def train_model():
     else:
         mae, r2 = float("nan"), float("nan")
 
-    st.info(f"✅ Modello addestrato (su kWh/kWp, plant={plant_kw:.2f} kWp) — MAE={mae:.3f}, R²={r2:.3f}")
+    st.info(f"✅ Modello RandomForest addestrato — MAE={mae:.2f} kWh, R²={r2:.3f}")
     return mae, r2, model.named_steps["rf"].feature_importances_.tolist(), features
 
 def load_model():
@@ -424,131 +412,51 @@ with tab1:
     st.subheader("📊 Storico produzione (kWh)")
 
     try:
-        # Carica dataset produzione
         df_prod = pd.read_csv("Dataset_Daily_EnergiaSeparata_2020_2025.csv")
 
-        # Normalizza nomi e tipi
+        # normalizza nomi e date
         if "E_INT_Daily_KWh" in df_prod.columns:
             df_prod = df_prod.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
         if "Date" in df_prod.columns:
             df_prod["Date"] = pd.to_datetime(df_prod["Date"], errors="coerce")
 
-        # Ordina e crea medie mobili a 7 giorni (curve più “pulite”)
+        # (opzionale) rolling 7g per linea più “pulita”
         df_plot = df_prod[["Date", "E_INT_Daily_kWh", "G_M0_Wm2"]].dropna().copy()
         df_plot = df_plot.sort_values("Date")
         df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7, min_periods=1).mean()
-        df_plot["G_M0_Wm2_7d"] = df_plot["G_M0_Wm2"].rolling(7, min_periods=1).mean()
-        df_plot = df_plot.set_index("Date")
+        df_plot["G_M0_Wm2_7d"]      = df_plot["G_M0_Wm2"].rolling(7, min_periods=1).mean()
 
-        # --- Plotly interattivo ---
-        import plotly.graph_objects as go
+        # grafico: energia (asse sinistro) + irradianza (asse destro)
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.plot(df_plot["Date"], df_plot["E_INT_Daily_kWh_7d"], label="Energia giornaliera (kWh)")
+        ax.set_ylabel("Energia (kWh)")
+        ax.set_xlabel("Data")
 
-        fig = go.Figure()
+        ax2 = ax.twinx()
+        ax2.plot(df_plot["Date"], df_plot["G_M0_Wm2_7d"], linestyle="--", label="Irradianza (kWh/m²)")
+        ax2.set_ylabel("Irradianza (kWh/m²)")
 
-        # Produzione (asse sinistro)
-        fig.add_trace(go.Scatter(
-            x=df_plot.index,
-            y=df_plot["E_INT_Daily_kWh_7d"],
-            mode="lines",
-            name="Produzione (kWh)",
-            line=dict(width=2)
-        ))
+        ax.set_title("Produzione reale + irradianza (media mobile 7 giorni)")
+        fig.tight_layout()
+        st.pyplot(fig)
 
-        # Irradianza (asse destro)
-        fig.add_trace(go.Scatter(
-            x=df_plot.index,
-            y=df_plot["G_M0_Wm2_7d"],
-            mode="lines",
-            name="Irradianza (kWh/m²)",
-            line=dict(width=2, dash="dot"),
-            yaxis="y2"
-        ))
-
-        fig.update_layout(
-            title="Produzione reale + Irradianza (media mobile 7 giorni)",
-            xaxis=dict(title="Data"),
-            yaxis=dict(title="Energia (kWh)"),
-            yaxis2=dict(title="Irradianza (kWh/m²)", overlaying="y", side="right"),
-            hovermode="x unified",
-            template="plotly_dark",
-            margin=dict(l=50, r=50, t=50, b=50),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
         st.caption(f"Totale righe: {len(df_prod)} — Ultima data: {pd.to_datetime(df_prod['Date']).max().date()}")
-
     except Exception as e:
-        st.error(f"Errore nel rendering del grafico: {e}")
+        st.error(f"Errore nel caricamento/plot dei dati storici: {e}")
+
 
 with tab2:
-
     c1, c2 = st.columns([2, 1])
     if c1.button("Addestra / Riaddestra modello"):
         mae, r2, importances, feat_names = train_model()
         st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
-           if importances is not None and feat_names is not None:
-            import plotly.graph_objects as go
-
-            # Grafico delle feature importance
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=feat_names,
-                y=importances,
-                text=[f"{v:.3f}" for v in importances],
-                textposition="auto",
-                marker_color="#00BFFF"
-            ))
-            fig.update_layout(
-                title="Importanza delle feature (Random Forest)",
-                xaxis_title="Feature",
-                yaxis_title="Importanza",
-                template="plotly_dark",
-                margin=dict(l=50, r=50, t=50, b=50)
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-import plotly.graph_objects as go
-
-# Media mobile 7 giorni
-df_plot = df_real_daily.copy()
-df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7).mean()
-df_plot["G_M0_Wm2_7d"] = df_plot["G_M0_Wm2"].rolling(7).mean()
-
-fig = go.Figure()
-
-# Produzione reale
-fig.add_trace(go.Scatter(
-    x=df_plot.index,
-    y=df_plot["E_INT_Daily_kWh_7d"],
-    mode="lines",
-    name="Produzione (kWh)",
-    line=dict(color="#00BFFF", width=2)
-))
-
-# Irradianza (asse secondario)
-fig.add_trace(go.Scatter(
-    x=df_plot.index,
-    y=df_plot["G_M0_Wm2_7d"],
-    mode="lines",
-    name="Irradianza (kWh/m²)",
-    line=dict(color="#FFA500", width=2, dash="dot"),
-    yaxis="y2"
-))
-
-fig.update_layout(
-    title="Produzione reale + Irradianza (media mobile 7 giorni)",
-    xaxis=dict(title="Data"),
-    yaxis=dict(title="Energia (kWh)"),
-    yaxis2=dict(title="Irradianza (kWh/m²)", overlaying="y", side="right"),
-    hovermode="x unified",
-    template="plotly_dark",
-    margin=dict(l=50, r=50, t=50, b=50)
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
+        if importances is not None and feat_names is not None:
+            fig, ax = plt.subplots(figsize=(6, 3))
+            ax.barh(feat_names, importances)
+            ax.set_xlabel("Importanza")
+            ax.set_title("Feature importance (RandomForest)")
+            st.pyplot(fig)
     if os.path.exists(MODEL_PATH):
         try:
             model = load_model()
