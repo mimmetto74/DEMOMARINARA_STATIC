@@ -488,7 +488,6 @@ with tab2:
         mae, r2, importances, feat_names = train_model()
         st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
         if importances is not None and feat_names is not None:
-            fig, ax = 
 import plotly.graph_objects as go
 
 # Media mobile 7 giorni
