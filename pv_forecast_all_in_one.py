@@ -424,75 +424,72 @@ with tab1:
     st.subheader("📊 Storico produzione (kWh)")
 
     try:
+        # Carica dataset produzione
         df_prod = pd.read_csv("Dataset_Daily_EnergiaSeparata_2020_2025.csv")
 
-        # normalizza nomi e date
+        # Normalizza nomi e tipi
         if "E_INT_Daily_KWh" in df_prod.columns:
             df_prod = df_prod.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
         if "Date" in df_prod.columns:
             df_prod["Date"] = pd.to_datetime(df_prod["Date"], errors="coerce")
 
-        # (opzionale) rolling 7g per linea più “pulita”
+        # Ordina e crea medie mobili a 7 giorni (curve più “pulite”)
         df_plot = df_prod[["Date", "E_INT_Daily_kWh", "G_M0_Wm2"]].dropna().copy()
         df_plot = df_plot.sort_values("Date")
         df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7, min_periods=1).mean()
-        df_plot["G_M0_Wm2_7d"]      = df_plot["G_M0_Wm2"].rolling(7, min_periods=1).mean()
+        df_plot["G_M0_Wm2_7d"] = df_plot["G_M0_Wm2"].rolling(7, min_periods=1).mean()
+        df_plot = df_plot.set_index("Date")
 
-        # grafico: energia (asse sinistro) + irradianza (asse destro)
-        import matplotlib.pyplot as plt
-        
+        # --- Plotly interattivo ---
+        import plotly.graph_objects as go
 
-# Media mobile 7 giorni
-df_plot = df_real_daily.copy()
-df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7).mean()
-df_plot["G_M0_Wm2_7d"] = df_plot["G_M0_Wm2"].rolling(7).mean()
+        fig = go.Figure()
 
-fig = go.Figure()
+        # Produzione (asse sinistro)
+        fig.add_trace(go.Scatter(
+            x=df_plot.index,
+            y=df_plot["E_INT_Daily_kWh_7d"],
+            mode="lines",
+            name="Produzione (kWh)",
+            line=dict(width=2)
+        ))
 
-# Produzione reale
-fig.add_trace(go.Scatter(
-    x=df_plot.index,
-    y=df_plot["E_INT_Daily_kWh_7d"],
-    mode="lines",
-    name="Produzione (kWh)",
-    line=dict(color="#00BFFF", width=2)
-))
+        # Irradianza (asse destro)
+        fig.add_trace(go.Scatter(
+            x=df_plot.index,
+            y=df_plot["G_M0_Wm2_7d"],
+            mode="lines",
+            name="Irradianza (kWh/m²)",
+            line=dict(width=2, dash="dot"),
+            yaxis="y2"
+        ))
 
-# Irradianza (asse secondario)
-fig.add_trace(go.Scatter(
-    x=df_plot.index,
-    y=df_plot["G_M0_Wm2_7d"],
-    mode="lines",
-    name="Irradianza (kWh/m²)",
-    line=dict(color="#FFA500", width=2, dash="dot"),
-    yaxis="y2"
-))
+        fig.update_layout(
+            title="Produzione reale + Irradianza (media mobile 7 giorni)",
+            xaxis=dict(title="Data"),
+            yaxis=dict(title="Energia (kWh)"),
+            yaxis2=dict(title="Irradianza (kWh/m²)", overlaying="y", side="right"),
+            hovermode="x unified",
+            template="plotly_dark",
+            margin=dict(l=50, r=50, t=50, b=50),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+        )
 
-fig.update_layout(
-    title="Produzione reale + Irradianza (media mobile 7 giorni)",
-    xaxis=dict(title="Data"),
-    yaxis=dict(title="Energia (kWh)"),
-    yaxis2=dict(title="Irradianza (kWh/m²)", overlaying="y", side="right"),
-    hovermode="x unified",
-    template="plotly_dark",
-    margin=dict(l=50, r=50, t=50, b=50)
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-
+        st.plotly_chart(fig, use_container_width=True)
         st.caption(f"Totale righe: {len(df_prod)} — Ultima data: {pd.to_datetime(df_prod['Date']).max().date()}")
-    except Exception as e:
-        st.error(f"Errore nel caricamento/plot dei dati storici: {e}")
 
+    except Exception as e:
+        st.error(f"Errore nel rendering del grafico: {e}")
 
 with tab2:
+
     c1, c2 = st.columns([2, 1])
     if c1.button("Addestra / Riaddestra modello"):
         mae, r2, importances, feat_names = train_model()
         st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
         if importances is not None and feat_names is not None:
-            
+            fig, ax = 
+import plotly.graph_objects as go
 
 # Media mobile 7 giorni
 df_plot = df_real_daily.copy()
