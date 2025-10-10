@@ -172,10 +172,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, r2_score
 import joblib
 
+
 def train_model():
     df0 = load_data()
 
-    # Normalizzazione nomi colonne
+    # Normalizza nome colonna energia
     if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
         df0 = df0.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
 
@@ -184,7 +185,13 @@ def train_model():
     if df.empty:
         return float("nan"), float("nan"), None, None
 
-    # ---------------- FEATURE ENGINEERING ----------------
+    # Potenza nominale (kWp) reale del tuo impianto
+    plant_kw = 947.52
+
+    # Crea la colonna normalizzata
+    df["E_SPEC_kWh_per_kWp"] = df["E_INT_Daily_kWh"] / plant_kw
+
+    # Feature engineering
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df["dayofyear"] = df["Date"].dt.dayofyear
@@ -193,7 +200,6 @@ def train_model():
         df["dayofyear"] = np.arange(len(df)) % 365
         df["month"] = ((np.arange(len(df)) % 365) // 30) + 1
 
-    # CloudCover inversa e radiazione corretta
     if "CloudCover_P" in df.columns:
         df["cloud_inv"] = 100 - df["CloudCover_P"]
         df["rad_eff"] = df["G_M0_Wm2"] * (df["cloud_inv"] / 100.0)
@@ -201,14 +207,19 @@ def train_model():
         df["cloud_inv"] = 100.0
         df["rad_eff"] = df["G_M0_Wm2"]
 
-    # ---------------- DATASET E MODELLO ----------------
     features = ["G_M0_Wm2", "rad_eff", "cloud_inv", "dayofyear", "month"]
-    target = "E_INT_Daily_kWh"
+    target = "E_SPEC_kWh_per_kWp"
 
     train = df[df["Date"] < "2025-01-01"]
     test = df[df["Date"] >= "2025-01-01"]
     X_train, y_train = train[features], train[target]
     X_test, y_test = test[features], test[target]
+
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import mean_absolute_error, r2_score
+    import joblib
 
     model = Pipeline([
         ("scaler", StandardScaler()),
@@ -223,6 +234,7 @@ def train_model():
     model.fit(X_train, y_train)
     joblib.dump(model, MODEL_PATH)
 
+    # Valutazione
     if len(X_test) > 0:
         y_pred = model.predict(X_test)
         mae = float(mean_absolute_error(y_test, y_pred))
@@ -230,7 +242,7 @@ def train_model():
     else:
         mae, r2 = float("nan"), float("nan")
 
-    st.info(f"✅ Modello RandomForest addestrato — MAE={mae:.2f} kWh, R²={r2:.3f}")
+    st.info(f"✅ Modello addestrato (su kWh/kWp, plant={plant_kw:.2f} kWp) — MAE={mae:.3f}, R²={r2:.3f}")
     return mae, r2, model.named_steps["rf"].feature_importances_.tolist(), features
 
 def load_model():
