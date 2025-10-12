@@ -375,6 +375,23 @@ with tab2:
         r2_val = st.session_state.get("last_r2", float("nan"))
         st.metric("MAE (Errore medio assoluto)", f"{mae_val:.2f}")
         st.metric("R² (Coefficiente di determinazione)", f"{r2_val:.3f}")
+        # --- Importanza delle feature ---
+        if os.path.exists("feature_importances.csv"):
+            feat = pd.read_csv("feature_importances.csv", index_col=0)
+            fig_feat = go.Figure()
+            fig_feat.add_trace(go.Bar(
+                x=feat.index,
+                y=feat["0"],
+                marker_color=['orange', 'deepskyblue', 'lightgreen']
+            ))
+            fig_feat.update_layout(
+                title="🔍 Importanza delle variabili nel modello",
+                xaxis_title="Feature",
+                yaxis_title="Importanza relativa",
+                template="plotly_white",
+                height=400
+            )
+            st.plotly_chart(fig_feat, use_container_width=True)
 
 
 with tab3:
