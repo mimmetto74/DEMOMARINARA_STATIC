@@ -2,8 +2,6 @@ import os, io, requests, joblib
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta, timezone
 import streamlit as st
-import altair as alt
-import json
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import folium
@@ -92,27 +90,6 @@ def load_model():
         train_model()
     return joblib.load(MODEL_PATH)
 
-
-def overlay_correction(model):
-    """Small linear correction y_real ≈ alpha * y_hat + beta using the historical daily dataset.
-    Returns (alpha, beta). If anything fails, defaults to (1.0, 0.0)."""
-    try:
-        df0 = load_data()
-        if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
-            df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
-        df = df0.dropna(subset=["E_INT_Daily_kWh","G_M0_Wm2"]).copy()
-        if df.empty:
-            return 1.0, 0.0
-        y_hat = model.predict(df[["G_M0_Wm2"]]).reshape(-1, 1)
-        lr = LinearRegression().fit(y_hat, df["E_INT_Daily_kWh"])
-        alpha = float(lr.coef_[0]); beta = float(lr.intercept_)
-        # avoid pathological values
-        if not (0.2 <= alpha <= 5.0):
-            alpha = 1.0
-        return alpha, beta
-    except Exception:
-        return 1.0, 0.0
-
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None):
     if tilt is not None and orient is not None and tilt > 0:
@@ -167,10 +144,7 @@ def compute_curve_and_daily(df, model, plant_kw):
     df["rad_corr"] = df["GlobalRad_W"] * (1 - df["CloudCover_P"]/100.0)
     sum_rad = df["rad_corr"].sum()
     pred_kwh = float(model.predict([[sum_rad]])[0]) if sum_rad > 0 else 0.0
-    # Apply overlay correction so estimated and real overlap better
-    alpha, beta = overlay_correction(model)
-    pred_kwh = max(0.0, alpha * pred_kwh + beta)
-    if sum_rad > 0 and pred_kwh > 0:
+    if sum_rad > 0:
         df["kWh_curve"] = pred_kwh * (df["rad_corr"]/sum_rad)
     else:
         df["kWh_curve"] = 0.0
@@ -178,7 +152,7 @@ def compute_curve_and_daily(df, model, plant_kw):
     peak_kW = float(df["kW_inst"].max()) if len(df) else 0.0
     peak_pct = float(peak_kW/plant_kw*100.0) if plant_kw > 0 else 0.0
     cloud_mean = float(df["CloudCover_P"].mean()) if "CloudCover_P" in df.columns else float("nan")
-    
+    return df, pred_kwh, peak_kW, peak_pct, cloud_mean
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
     day = (datetime.now(timezone.utc).date() + timedelta(days=offset_days))
@@ -269,31 +243,15 @@ st.sidebar.download_button("⬇️ Scarica log filtrato", csv_io.getvalue(), "fo
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa"])
 
-
 with tab1:
     try:
         df = load_data()
+        st.subheader("Storico produzione (kWh) e irradianza (W/m²)")
         if "E_INT_Daily_KWh" in df.columns and "E_INT_Daily_kWh" not in df.columns:
             df = df.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
-        model = load_model()
-        alpha, beta = overlay_correction(model)
-        # Stima in kWh usando il modello + correzione
-        y_hat = model.predict(df[["G_M0_Wm2"]])
-        df2 = df.copy()
-        df2["Produzione reale (kWh)"] = df2["E_INT_Daily_kWh"].clip(lower=0)
-        df2["Produzione stimata (kWh)"] = (alpha * y_hat + beta).clip(min=0)
-        long = df2[["Date","Produzione reale (kWh)","Produzione stimata (kWh)"]].melt("Date", var_name="Serie", value_name="kWh")
-        st.subheader("Storico produzione vs stima (kWh)")
-        ch = alt.Chart(long).mark_line().encode(
-            x=alt.X("Date:T", title="Data"),
-            y=alt.Y("kWh:Q", title="kWh"),
-            color="Serie:N",
-            tooltip=[alt.Tooltip("Date:T", title="Data"), alt.Tooltip("Serie:N"), alt.Tooltip("kWh:Q", title="kWh", format=".1f")]
-        ).interactive()
-        st.altair_chart(ch, use_container_width=True)
+        st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh","G_M0_Wm2"]])
     except Exception as e:
         st.error(f"Impossibile caricare dataset: {e}")
-
 
 with tab2:
     c1, c2, c3 = st.columns(3)
@@ -316,6 +274,7 @@ with tab3:
     go = st.button("Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)")
     model = load_model()
     results = {}
+    st.session_state.setdefault('pred_curves', {})
 
     sections = {"Ieri": st.container(), "Oggi": st.container(), "Domani": st.container(), "Dopodomani": st.container()}
 
@@ -327,7 +286,9 @@ with tab3:
                     lat_sidebar, lon_sidebar, off, label, model, st.session_state["tilt"], st.session_state["orient"], provider_pref, plant_kw, autosave=autosave
                 )
                 results[label] = dfp
+                st.session_state['pred_curves'][label] = dfp
                 st.caption(f"Provider: **{provider}** | Stato: **{status}**")
+                if url: st.code(url, language="text")
                 if dfp is None or dfp.empty:
                     st.warning("Nessun dato disponibile.")
                 else:
@@ -337,15 +298,7 @@ with tab3:
                     metr3.metric("% della targa", f"{peak_pct:.1f}%")
                     metr4.metric("Nuvolosità media", f"{cloud_mean:.0f}%")
                     chart_df = dfp.set_index("time")[["kWh_curve"]].rename(columns={"kWh_curve":"Produzione stimata (kWh/15min)"})
-                    
-# Grafico interattivo (kWh/15min) con tooltip data/ora
-ch = alt.Chart(chart_df.reset_index()).mark_line().encode(
-    x=alt.X("time:T", title="Data / Ora"),
-    y=alt.Y("Produzione stimata (kWh/15min):Q", title="kWh / 15 min"),
-    tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Produzione stimata (kWh/15min):Q", title="kWh (15m)", format=".3f")]
-).interactive()
-st.altair_chart(ch, use_container_width=True)
-
+                    st.line_chart(chart_df)
 
                     # Download curva 15-min (per-giorno)
                     csv_buf = io.StringIO()
@@ -370,16 +323,7 @@ st.altair_chart(ch, use_container_width=True)
                 comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
         if not comp.empty:
             comp = comp.set_index("time")
-            
-long = comp.reset_index().melt("time", var_name="Giorno", value_name="kWh_15m")
-chc = alt.Chart(long).mark_line().encode(
-    x=alt.X("time:T", title="Data / Ora"),
-    y=alt.Y("kWh_15m:Q", title="kWh / 15 min"),
-    color="Giorno:N",
-    tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Giorno:N"), alt.Tooltip("kWh_15m:Q", title="kWh (15m)", format=".3f")]
-).interactive()
-st.altair_chart(chc, use_container_width=True)
-
+            st.line_chart(comp)
 
             # download unico delle 4 curve
             all_curves = pd.DataFrame()
@@ -408,3 +352,78 @@ with tab4:
     ).add_to(m)
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=550)
+
+
+
+with tab5:
+    st.subheader("✅ Validazione previsioni vs produzione reale")
+    st.caption("Carica un CSV con la produzione reale (es. SMA): separatore ';' e virgola decimale. Oppure usa le previsioni calcolate.")
+
+    real_file = st.file_uploader("CSV produzione reale", type=["csv"])
+    use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
+    pred_file = None if use_session_pred else st.file_uploader("CSV previsioni (opzionale)", type=["csv"], help="Colonna kWh_15m o kWh_curve (oppure kW_inst)")
+
+    if real_file is not None:
+        try:
+            df_real15, df_real_daily = normalize_real_csv(real_file)
+            st.success(f"Dati reali: {df_real15.index.min()} → {df_real15.index.max()}  ({len(df_real_daily)} giorni)")
+
+            pred_source = None
+            if use_session_pred and 'pred_curves' in st.session_state and len(st.session_state['pred_curves'])>0:
+                labels = list(st.session_state['pred_curves'].keys())
+                sel = st.selectbox("Scegli la previsione calcolata", labels, index=0)
+                pred_source = st.session_state['pred_curves'][sel].copy().set_index('time')
+            elif not use_session_pred and pred_file is not None:
+                import pandas as pd
+                pred_df = pd.read_csv(pred_file, parse_dates=['time']).set_index('time')
+                pred_source = pred_df
+            else:
+                st.info("Seleziona una previsione o carica un CSV con la curva prevista.")
+
+            if pred_source is not None:
+                lag = st.slider("Shift previsione (multipli di 15 minuti)", -8, 8, 0)
+                metrics, df_eval, df_daily = evaluate_prediction_vs_real(df_real15, pred_source, apply_shift=lag)
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("MAE (kWh / 15m)", f"{metrics['MAE_15m_kWh']:.3f}")
+                c2.metric("RMSE (kWh / 15m)", f"{metrics['RMSE_15m_kWh']:.3f}")
+                c3.metric("MAPE 15m (%)", f"{metrics['MAPE_15m_%']:.1f}%")
+                c4.metric("R²", f"{metrics['R2']:.3f}")
+                c5, c6 = st.columns(2)
+                c5.metric("Energia reale (kWh)", f"{metrics['Energy_real_kWh']:.1f}")
+                c6.metric("Energia prevista (kWh)", f"{metrics['Energy_pred_kWh']:.1f}")
+
+                plot = df_eval.reset_index().rename(columns={'index':'time'})
+                plot['time_str'] = plot['time'].dt.strftime('%Y-%m-%d %H:%M')
+                long = plot[['time','time_str','kWh_real','kWh_pred']].melt(['time','time_str'], var_name='Serie', value_name='kWh_15m')
+                ch = alt.Chart(long).mark_line().encode(
+                    x=alt.X('time:T', title='Data / Ora'),
+                    y=alt.Y('kWh_15m:Q', title='kWh / 15 min'),
+                    color='Serie:N',
+                    tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('Serie:N'), alt.Tooltip('kWh_15m:Q', title='kWh (15m)', format='.3f')]
+                ).interactive()
+                st.altair_chart(ch, use_container_width=True)
+
+                sc = alt.Chart(df_eval.reset_index()).mark_point().encode(
+                    x=alt.X('kWh_real:Q', title='Reale (kWh/15m)'),
+                    y=alt.Y('kWh_pred:Q', title='Prevista (kWh/15m)'),
+                    tooltip=[alt.Tooltip('time:T', title='Data/ora'), alt.Tooltip('kWh_real:Q'), alt.Tooltip('kWh_pred:Q')]
+                ).interactive()
+                st.altair_chart(sc, use_container_width=True)
+
+                dl = df_daily.reset_index().melt('time', var_name='Serie', value_name='kWh_day')
+                chd = alt.Chart(dl).mark_bar().encode(
+                    x=alt.X('time:T', title='Giorno'),
+                    y=alt.Y('kWh_day:Q', title='kWh (giorno)'),
+                    color='Serie:N'
+                )
+                st.altair_chart(chd, use_container_width=True)
+
+                import io
+                buf15 = io.StringIO(); df_eval.to_csv(buf15, index=True)
+                st.download_button("⬇️ Scarica confronto 15‑min (CSV)", buf15.getvalue(), file_name="confronto_15min.csv", mime="text/csv")
+                bufd = io.StringIO(); df_daily.to_csv(bufd, index=True)
+                st.download_button("⬇️ Scarica confronto giornaliero (CSV)", bufd.getvalue(), file_name="confronto_daily.csv", mime="text/csv")
+
+        except Exception as e:
+            st.error(f"Errore nel caricamento o confronto: {e}")
