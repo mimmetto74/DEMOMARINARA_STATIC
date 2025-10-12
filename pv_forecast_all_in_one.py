@@ -64,26 +64,54 @@ def write_log(**row):
 def load_data():
     return pd.read_csv(DATA_PATH, parse_dates=["Date"])
 
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
+
 def train_model():
     df0 = load_data()
+
+    # Corregge nomi colonne
     if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
-        df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
-    df = df0.dropna(subset=["E_INT_Daily_kWh","G_M0_Wm2"])
-    if df.empty:
-        return float("nan"), float("nan"), None, None
-    train = df[df["Date"] < "2025-01-01"]
-    test  = df[df["Date"] >= "2025-01-01"]
-    X_train, y_train = train[["G_M0_Wm2"]], train["E_INT_Daily_kWh"]
-    model = LinearRegression().fit(X_train, y_train)
+        df0 = df0.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
+
+    # Se mancano le nuove feature, le crea con NaN
+    for col in ["CloudCover_P", "Temp_Air"]:
+        if col not in df0.columns:
+            df0[col] = np.nan
+
+    # Rimuove righe incomplete
+    df = df0.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"]).copy()
+
+    # Feature set multivariato
+    X = df[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].fillna(df[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].mean())
+    y = df["E_INT_Daily_kWh"]
+
+    # Suddivisione train/test
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True, random_state=42)
+
+    # Modello Random Forest
+    model = RandomForestRegressor(
+        n_estimators=300,
+        max_depth=10,
+        random_state=42
+    )
+    model.fit(X_train, y_train)
+
+    # Valutazione
+    y_pred = model.predict(X_test)
+    mae = float(mean_absolute_error(y_test, y_pred))
+    r2 = float(r2_score(y_test, y_pred))
+
+    # Salva modello
     joblib.dump(model, MODEL_PATH)
-    mae = r2 = float("nan")
-    if len(test) > 0:
-        y_pred = model.predict(test[["G_M0_Wm2"]])
-        mae = float(mean_absolute_error(test["E_INT_Daily_kWh"], y_pred))
-        r2  = float(r2_score(test["E_INT_Daily_kWh"], y_pred))
-    coef = float(model.coef_[0]) if hasattr(model, "coef_") else None
-    intercept = float(model.intercept_) if hasattr(model, "intercept_") else None
-    return mae, r2, coef, intercept
+
+    # Importanza feature
+    feature_importances = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False)
+    feature_importances.to_csv("feature_importances.csv", index=True)
+
+    return mae, r2, feature_importances, model
+
 
 def load_model():
     if not os.path.exists(MODEL_PATH):
