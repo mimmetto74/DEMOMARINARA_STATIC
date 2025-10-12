@@ -243,6 +243,8 @@ st.sidebar.download_button("⬇️ Scarica log filtrato", csv_io.getvalue(), "fo
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa"])
 
+import plotly.graph_objects as go
+
 with tab1:
     try:
         df = load_data()
@@ -252,13 +254,39 @@ with tab1:
         if "E_INT_Daily_KWh" in df.columns and "E_INT_Daily_kWh" not in df.columns:
             df = df.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
 
-        # Grafico 1: Produzione (kWh)
-        st.markdown("#### ⚡ Produzione giornaliera (kWh)")
-        st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh"]])
+        # --- Grafico 1: Produzione (kWh) ---
+        fig1 = go.Figure()
+        fig1.add_trace(go.Scatter(
+            x=df["Date"], y=df["E_INT_Daily_kWh"],
+            mode='lines+markers',
+            name='Produzione (kWh)',
+            line=dict(color='orange', width=2)
+        ))
+        fig1.update_layout(
+            title="⚡ Produzione giornaliera (kWh)",
+            xaxis_title="Data",
+            yaxis_title="Energia (kWh)",
+            template="plotly_white",
+            height=400
+        )
+        st.plotly_chart(fig1, use_container_width=True)
 
-        # Grafico 2: Irradianza (W/m²)
-        st.markdown("#### ☀️ Irradianza giornaliera (W/m²)")
-        st.line_chart(df.set_index("Date")[["G_M0_Wm2"]])
+        # --- Grafico 2: Irradianza (W/m²) ---
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=df["Date"], y=df["G_M0_Wm2"],
+            mode='lines+markers',
+            name='Irradianza (W/m²)',
+            line=dict(color='deepskyblue', width=2)
+        ))
+        fig2.update_layout(
+            title="☀️ Irradianza giornaliera (W/m²)",
+            xaxis_title="Data",
+            yaxis_title="W/m²",
+            template="plotly_white",
+            height=400
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
     except Exception as e:
         st.error(f"Impossibile caricare dataset: {e}")
