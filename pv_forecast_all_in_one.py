@@ -344,13 +344,20 @@ with tab2:
         df = df.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
 
         # Predizione
-       # Garantisce la presenza delle colonne richieste
-      for col in ["CloudCover_P", "Temp_Air"]:
-        if col not in df.columns:
-           df[col] = np.nan
+             # --- Predizione con allineamento feature ---
+        # Assicura che le colonne esistano
+        for col in ["CloudCover_P", "Temp_Air"]:
+            if col not in df.columns:
+                df[col] = np.nan
 
-       X_pred = df[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].fillna(df[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].mean())
-       df["Predetto"] = model.predict(X_pred)
+        # Prepara le feature con riempimento dei NaN
+        X_pred = df[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].fillna(
+            df[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].mean()
+        )
+
+        # Calcola i valori predetti
+        df["Predetto"] = model.predict(X_pred)
+
 
 
         # Grafico: reale vs predetto
