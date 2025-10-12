@@ -510,7 +510,9 @@ with tab3:
 
                     # Download curva 15-min (per-giorno)
                     csv_buf = io.StringIO()
-                    out_df = dfp[["time","GlobalRad_W","CloudCover_P","rad_corr","kWh_curve","kW_inst"]].copy()
+                   # Esporta solo le colonne effettivamente presenti (senza kW_inst)
+                    cols_ok = [c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"] if c in df.columns]
+                    out_df = df[cols_ok].copy()
                     out_df.to_csv(csv_buf, index=False)
                     st.download_button(f"⬇️ Scarica curva 15-min ({label})", csv_buf.getvalue(),
                                        file_name=f"curve_{label.replace('ò','o').lower()}_15min.csv", mime="text/csv")
