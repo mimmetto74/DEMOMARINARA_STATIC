@@ -212,6 +212,13 @@ def compute_curve_and_daily(df, model, plant_kw):
         return None, 0.0, 0.0, 0.0, float("nan")
 
     df = df.copy().sort_values("time")
+
+    # Assicura che le colonne esistano SEMPRE
+    for col in ["GlobalRad_W", "CloudCover_P", "Temp_Air"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    # Correzioni base
     df["GlobalRad_W"] = df["GlobalRad_W"].clip(lower=0)
     df["CloudCover_P"] = df["CloudCover_P"].clip(lower=0, upper=100)
     df["Temp_Air"] = df["Temp_Air"].fillna(df["Temp_Air"].mean())
@@ -222,20 +229,20 @@ def compute_curve_and_daily(df, model, plant_kw):
     cloud_mean = df["CloudCover_P"].mean()
     temp_mean = df["Temp_Air"].mean()
 
-    # Predizione del totale giornaliero (modello multivariato)
+    # Predizione del totale giornaliero
     if sum_rad > 0:
         X_pred = [[sum_rad, cloud_mean, temp_mean]]
         pred_kwh = float(model.predict(X_pred)[0])
     else:
         pred_kwh = 0.0
 
-    # Distribuzione nel tempo (solo per grafico 15 min)
+    # Curva giornaliera
     if sum_rad > 0:
         df["kWh_curve"] = pred_kwh * (df["rad_corr"] / sum_rad)
     else:
         df["kWh_curve"] = 0.0
 
-    peak_kW = df["kWh_curve"].max() * 4  # 15 min → 1h
+    peak_kW = df["kWh_curve"].max() * 4  # 15 min -> 1h
     peak_pct = (peak_kW / plant_kw * 100) if plant_kw > 0 else 0.0
 
     return df, pred_kwh, peak_kW, peak_pct, cloud_mean
