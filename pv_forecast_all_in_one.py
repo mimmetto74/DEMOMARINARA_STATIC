@@ -1,13 +1,36 @@
 # -*- coding: utf-8 -*-
-# Solar Forecast - ROBOTRONIX for IMEPOWER (fixed build)
-# Clean Streamlit app: RF model, provider fallback, charts, exports, comparison.
+# Solar Forecast - ROBOTRONIX for IMEPOWER (SECURE build)
+# Includes: login page, embedded Meteomatics credentials, provider fallback, RF model, charts, exports, comparison.
 import os, io, json, math, joblib, requests, numpy as np, pandas as pd
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title='Solar Forecast - ROBOTRONIX for IMEPOWER', layout='wide')
+st.set_page_config(page_title='Solar Forecast - ROBOTRONIX for IMEPOWER (SECURE)', layout='wide')
 
+# ---------------------------- SECURITY / LOGIN ---------------------------- #
+APP_USER = os.environ.get('APP_USER', 'admin')
+APP_PASS = os.environ.get('APP_PASS', 'robotronix')
+
+def render_login():
+    st.title('🔐 Accesso richiesto')
+    st.write('Inserisci le credenziali per accedere all\'applicazione.')
+    u = st.text_input('Username', value='', key='login_user')
+    p = st.text_input('Password', value='', type='password', key='login_pass')
+    go_btn = st.button('Accedi')
+    if go_btn:
+        if u == APP_USER and p == APP_PASS:
+            st.session_state['authenticated'] = True
+            st.success('Accesso effettuato!')
+            st.experimental_rerun()
+        else:
+            st.error('❌ Credenziali non valide')
+
+if not st.session_state.get('authenticated', False):
+    render_login()
+    st.stop()
+
+# ---------------------------- CONFIG ---------------------------- #
 DATA_PATH = os.environ.get('PV_DAILY_DATA', 'Dataset_Daily_EnergiaSeparata_2020_2025.csv')
 MODEL_PATH = os.environ.get('PV_MODEL_PATH', 'rf_model.joblib')
 LOG_DIR = os.environ.get('PV_LOG_DIR', 'logs')
@@ -19,9 +42,11 @@ DEFAULT_TILT = float(os.environ.get('PV_TILT', '0'))
 DEFAULT_ORIENT = float(os.environ.get('PV_ORIENT', '180'))
 DEFAULT_PLANT_KW = float(os.environ.get('PV_PLANT_KW', '1000'))
 
-MM_USER = os.environ.get('MM_USER', '')
-MM_PASS = os.environ.get('MM_PASS', '')
+# ----------------------- METEOMATICS CREDENTIALS (embedded) ----------------------- #
+MM_USER = 'teseospa-eiffageenergiesystemesitaly_daniello_fabio'
+MM_PASS = '6S8KTHPbrUlp6523T9Xd'
 
+# -------------------------- UTILITIES -------------------------- #
 def write_log(**kwargs):
     try:
         ts = datetime.utcnow().strftime('%Y%m%d')
@@ -45,19 +70,34 @@ def load_model():
         return obj['model']
     return obj
 
+# ----------------------- FETCH PROVIDERS ------------------------ #
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None):
+    # Robust error handling with explicit messages
     if not MM_USER or not MM_PASS:
-        raise RuntimeError('Meteomatics credentials missing')
+        raise RuntimeError('Credenziali Meteomatics mancanti')
     if tilt is not None and orient is not None and float(tilt) > 0:
         rad_param = f'global_rad_tilt_{int(round(float(tilt)))}_orientation_{int(round(float(orient)))}:W'
     else:
         rad_param = 'global_rad:W'
     params = f'{rad_param},total_cloud_cover:p,t_2m:C'
     url = f'https://api.meteomatics.com/{start_iso}--{end_iso}:PT15M/{params}/{lat},{lon}/json'
-    r = requests.get(url, auth=(MM_USER, MM_PASS), timeout=30)
-    r.raise_for_status()
-    j = r.json()
+    try:
+        r = requests.get(url, auth=(MM_USER, MM_PASS), timeout=30)
+    except requests.Timeout as e:
+        raise RuntimeError('Timeout contattando Meteomatics (30s)') from e
+    except Exception as e:
+        raise RuntimeError(f'Errore rete Meteomatics: {e}') from e
+    if r.status_code == 401:
+        raise RuntimeError('401 Unauthorized: credenziali Meteomatics non valide')
+    if r.status_code == 404:
+        raise RuntimeError('404: Nessun dato disponibile per il periodo richiesto')
+    if not r.ok:
+        raise RuntimeError(f'HTTP {r.status_code}: {r.text[:200]}')
+    try:
+        j = r.json()
+    except Exception as e:
+        raise RuntimeError('Risposta non in formato JSON valida da Meteomatics') from e
     rows = []
     for blk in j.get('data', []):
         prm = blk.get('parameter')
@@ -66,8 +106,8 @@ def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None
             col = 'CloudCover_P'
         elif prm == 't_2m:C':
             col = 'Temp_Air'
-        for d in blk['coordinates'][0]['dates']:
-            rows.append({'time': d['date'], col: d['value']})
+        for d in blk.get('coordinates', [{}])[0].get('dates', []):
+            rows.append({'time': d.get('date'), col: d.get('value')})
     df = pd.DataFrame(rows)
     if df.empty:
         return url, df
@@ -101,6 +141,7 @@ def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
     df['provider'] = 'Open-Meteo'
     return url, df
 
+# ----------------------- MODEL TRAINING ------------------------ #
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -124,6 +165,7 @@ def train_model():
     pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(LOG_DIR,'feature_importances.csv'))
     return mae, r2
 
+# ------------------- DAILY CURVE & FORECAST ------------------- #
 def compute_curve_and_daily(df, model, plant_kw):
     if df is None or df.empty:
         return None, 0.0, 0.0, 0.0, float('nan')
@@ -173,11 +215,11 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         pd.DataFrame([{'date': str(day), 'energy_kWh': float(pred_kwh), 'peak_kW': float(peak_kW), 'cloud_mean': float(cloud_mean)}]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
 
+# --------------- COMPARISON: FORECAST VS REAL ----------------- #
 from sklearn.metrics import mean_absolute_error
 def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
     try: df_real = pd.read_csv(data_path, parse_dates=['Date'])
-    except Exception as e:
-        st.warning(f'⚠️ Errore caricamento storico: {e}'); return None, None, None
+    except Exception as e: st.warning(f'⚠️ Errore caricamento storico: {e}'); return None, None, None
     if forecast_df is None or forecast_df.empty or 'time' not in forecast_df.columns: return None, None, None
     f_date = pd.to_datetime(forecast_df['time'].iloc[0]).date()
     df_real_day = df_real[df_real['Date'].dt.date == f_date]
@@ -195,11 +237,13 @@ def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
     fig.update_layout(title=f'📊 Confronto previsione vs reale – {day_label}', xaxis_title='Ora', yaxis_title='Potenza (kW)', template='plotly_white', height=350)
     return fig, mae, mape
 
-st.title('☀️ Solar Forecast - ROBOTRONIX for IMEPOWER')
+# ----------------------------- UI ----------------------------- #
+st.title('☀️ Solar Forecast - ROBOTRONIX for IMEPOWER (SECURE)')
 for k,v in {'lat':DEFAULT_LAT,'lon':DEFAULT_LON,'tilt':DEFAULT_TILT,'orient':DEFAULT_ORIENT,'provider_pref':'Auto','plant_kw':DEFAULT_PLANT_KW}.items():
     st.session_state.setdefault(k,v)
 tab1, tab2, tab3, tab4 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa'])
 
+# ---- TAB 1: Storico ---- #
 with tab1:
     try:
         df = load_data()
@@ -213,9 +257,9 @@ with tab1:
             fig2 = go.Figure(); fig2.add_trace(go.Scatter(x=df['Date'], y=df['G_M0_Wm2'], mode='lines', name='Irradianza (W/m²)', line=dict(color='deepskyblue', width=2)))
             fig2.update_layout(template='plotly_white', height=350, title='☀️ Irradianza giornaliera (W/m²)', xaxis_title='Data', yaxis_title='W/m²')
             st.plotly_chart(fig2, use_container_width=True)
-    except Exception as e:
-        st.error(f'Errore caricamento storico: {e}')
+    except Exception as e: st.error(f'Errore caricamento storico: {e}')
 
+# ---- TAB 2: Modello ---- #
 with tab2:
     st.subheader('🧠 Modello di previsione – Random Forest (multivariato)')
     c1,c2,c3 = st.columns([1,1,2])
@@ -242,9 +286,9 @@ with tab2:
             figf = go.Figure(); figf.add_trace(go.Bar(x=feat.index, y=feat.iloc[:,0]))
             figf.update_layout(title='🔍 Importanza variabili', xaxis_title='Feature', yaxis_title='Importanza', template='plotly_white', height=350)
             st.plotly_chart(figf, use_container_width=True)
-    else:
-        st.info('Addestra il modello per abilitare le previsioni.')
+    else: st.info('Addestra il modello per abilitare le previsioni.')
 
+# ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('Previsioni (PT15M, tilt/orient, provider toggle)')
     colA,colB,colC,colD = st.columns(4)
@@ -273,6 +317,17 @@ with tab3:
                 st.caption(f'Provider: {provider} | Stato: {status}')
                 st.code(url or '', language='text')
                 if dfp is not None and not dfp.empty:
+                    # 📈 Anteprima diagnostica dati provider
+                    with st.expander('📈 Meteomatics/Open-Meteo: anteprima dati grezzi'):
+                        try:
+                            fig_diag = go.Figure()
+                            fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['GlobalRad_W'], name='GlobalRad_W', mode='lines'))
+                            if 'CloudCover_P' in dfp.columns: fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['CloudCover_P'], name='CloudCover_P', mode='lines'))
+                            if 'Temp_Air' in dfp.columns: fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['Temp_Air'], name='Temp_Air', mode='lines'))
+                            fig_diag.update_layout(template='plotly_white', height=220, margin=dict(l=10,r=10,t=30,b=10))
+                            st.plotly_chart(fig_diag, use_container_width=True)
+                        except Exception as e:
+                            st.info(f'Diagnostica non disponibile: {e}')
                     dfp = dfp.copy(); dfp['Potenza_kW'] = dfp['kWh_curve'] * 4
                     fig = go.Figure(); fig.add_trace(go.Scatter(x=dfp['time'], y=dfp['Potenza_kW'], mode='lines', fill='tozeroy', name='Potenza prevista (kW)', line=dict(color='orange', width=2), fillcolor='rgba(255,165,0,0.3)'))
                     fig.add_hline(y=peak_kW, line_dash='dash', line_color='red', annotation_text=f'Picco: {peak_kW:.1f} kW', annotation_position='top left')
@@ -308,5 +363,6 @@ with tab3:
                 st.download_button('📦 Scarica TUTTE le curve (CSV unico)', buf_all.getvalue(), 'all_curves_15min.csv', 'text/csv')
             else: st.info('Nessuna curva disponibile per il confronto.')
 
+# ---- TAB 4: Map (placeholder) ---- #
 with tab4:
     st.info('Mappa/Localizzazione: usa i controlli nel tab Previsioni per cambiare lat/lon/tilt/orient.')
