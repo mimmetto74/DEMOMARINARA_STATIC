@@ -529,8 +529,13 @@ with tab3:
         comp = pd.DataFrame()
         for lbl, dfp in results.items():
             if dfp is not None and not dfp.empty:
-                tmp = dfp[["time","kWh_curve"]].rename(columns={"kWh_curve": lbl})
-                comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
+               # Rimuove riferimenti a colonne obsolete come kW_inst
+        cols_ok = [
+            c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
+            if c in dfp.columns
+        ]
+        tmp = dfp[cols_ok].copy()
+            comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
         if not comp.empty:
             comp = comp.set_index("time")
             st.line_chart(comp)
