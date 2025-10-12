@@ -530,11 +530,13 @@ with tab3:
         for lbl, dfp in results.items():
             if dfp is not None and not dfp.empty:
                # Rimuove riferimenti a colonne obsolete come kW_inst
-        cols_ok = [
-            c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
-            if c in dfp.columns
-        ]
-        tmp = dfp[cols_ok].copy()
+               
+            cols_ok = [
+               c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
+               if c in dfp.columns
+           ]
+             tmp = dfp[cols_ok].copy()
+
             comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
         if not comp.empty:
             comp = comp.set_index("time")
@@ -543,10 +545,16 @@ with tab3:
             # download unico delle 4 curve
             all_curves = pd.DataFrame()
             for lbl, dfp in results.items():
-                if dfp is not None and not dfp.empty:
-                    tmp = dfp[["time","GlobalRad_W","CloudCover_P","rad_corr","kWh_curve","kW_inst"]].copy()
-                    tmp["giorno"] = lbl
-                    all_curves = pd.concat([all_curves, tmp], ignore_index=True)
+        if dfp is not None and not dfp.empty:
+        # Seleziona solo colonne esistenti (senza kW_inst)
+           cols_ok = [
+              c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
+              if c in dfp.columns
+         ]
+         tmp = dfp[cols_ok].copy()
+         tmp["giorno"] = lbl
+         all_curves = pd.concat([all_curves, tmp], ignore_index=True)
+
             if not all_curves.empty:
                 buf_all = io.StringIO()
                 all_curves.to_csv(buf_all, index=False)
