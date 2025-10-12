@@ -292,21 +292,62 @@ with tab1:
         st.error(f"Impossibile caricare dataset: {e}")
 
 
+import plotly.graph_objects as go
+from sklearn.metrics import mean_absolute_error, r2_score
+
 with tab2:
-    c1, c2, c3 = st.columns(3)
-    if c1.button("Addestra / Riaddestra modello"):
-        mae, r2, coef, intercept = train_model()
-        st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
-        if coef is not None and intercept is not None:
-            st.info(f"**Slope**: {coef:.6f}  |  **Intercept**: {intercept:.3f}")
+    st.subheader("🧠 Modello di previsione – Random Forest")
+
+    c1, c2 = st.columns([1, 3])
+
+    # Pulsante per addestrare il modello
+    if c1.button("Addestra / Riaddestra modello", use_container_width=True):
+        mae, r2, _, _ = train_model()
+        st.session_state["last_mae"] = mae
+        st.session_state["last_r2"] = r2
+        st.success(f"✅ Modello addestrato con successo!\n\n**MAE:** {mae:.2f} | **R²:** {r2:.3f}")
+
+    # Se il modello esiste, mostriamo grafico
     if os.path.exists(MODEL_PATH):
         model = load_model()
-        try:
-            coef = float(model.coef_[0]); intercept = float(model.intercept_)
-            c2.metric("Slope (kWh per unità irradianza)", f"{coef:.6f}")
-            c3.metric("Intercept", f"{intercept:.3f}")
-        except Exception:
-            pass
+        df = load_data()
+        if "E_INT_Daily_KWh" in df.columns and "E_INT_Daily_kWh" not in df.columns:
+            df = df.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
+        df = df.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
+
+        # Predizione
+        df["Predetto"] = model.predict(df[["G_M0_Wm2"]])
+
+        # Grafico: reale vs predetto
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df["E_INT_Daily_kWh"], y=df["Predetto"],
+            mode='markers',
+            marker=dict(size=5, color='deepskyblue', opacity=0.6),
+            name="Punti dati"
+        ))
+        fig.add_trace(go.Scatter(
+            x=[df["E_INT_Daily_kWh"].min(), df["E_INT_Daily_kWh"].max()],
+            y=[df["E_INT_Daily_kWh"].min(), df["E_INT_Daily_kWh"].max()],
+            mode='lines',
+            line=dict(color='orange', dash='dash'),
+            name="Linea ideale y = x"
+        ))
+        fig.update_layout(
+            title="📈 Confronto produzione reale vs predetta",
+            xaxis_title="Produzione reale (kWh)",
+            yaxis_title="Produzione predetta (kWh)",
+            template="plotly_white",
+            height=500
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Mostra metriche
+        mae_val = st.session_state.get("last_mae", float("nan"))
+        r2_val = st.session_state.get("last_r2", float("nan"))
+        st.metric("MAE (Errore medio assoluto)", f"{mae_val:.2f}")
+        st.metric("R² (Coefficiente di determinazione)", f"{r2_val:.3f}")
+
 
 with tab3:
     st.subheader("Previsioni (PT15M, tilt/orient, provider toggle)")
