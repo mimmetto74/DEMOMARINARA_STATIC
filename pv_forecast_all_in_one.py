@@ -1,112 +1,13 @@
 import os, io, requests, joblib
-import plotly.graph_objects as go
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta, timezone
 import streamlit as st
+import altair as alt
+import json
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import folium
 from streamlit_folium import st_folium
-import altair as alt
-
-def normalize_real_csv(file_like):
-    import pandas as pd
-    try:
-        df = pd.read_csv(file_like, sep=';', decimal=',', engine='python')
-        if df.shape[1] == 1:
-            file_like.seek(0); df = pd.read_csv(file_like)
-    except Exception:
-        file_like.seek(0); df = pd.read_csv(file_like)
-    df.columns = [str(c).strip() for c in df.columns]
-    time_col = df.columns[0]; val_col = df.columns[1] if len(df.columns)>1 else None
-    if val_col is None: raise ValueError("CSV non valido: servono 2 colonne (timestamp; valore).")
-    df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
-    # drop tz if any
-    try:
-        if hasattr(df[time_col].dt, 'tz') and df[time_col].dt.tz is not None:
-            df[time_col] = df[time_col].dt.tz_localize(None)
-    except Exception:
-        pass
-    df = df.dropna(subset=[time_col]).sort_values(time_col)
-    df[val_col] = pd.to_numeric(df[val_col], errors='coerce').fillna(0.0)
-    s = df.set_index(time_col)[val_col].astype(float).rename('kWh_15m')
-    s = s[~s.index.duplicated(keep='first')]
-    idx = pd.date_range(s.index.min(), s.index.max(), freq='15T')
-    s = s.reindex(idx).fillna(0.0)
-    df15 = s.to_frame(); df15['kW_inst'] = df15['kWh_15m'] * 4.0
-    daily = df15['kWh_15m'].resample('D').sum().to_frame('kWh_day'); daily['kW_peak'] = df15['kW_inst'].resample('D').max()
-    return df15, daily
-
-def build_daily_feature_row(df15, day_dt):
-    """
-    df15: dataframe a 15 min con colonne 'GlobalRad_W' (W/m2) e 'CloudCover_P' (0..100)
-    day_dt: datetime.date del giorno da stimare
-    Ritorna un DataFrame 1x5 con le feature nell'ordine atteso dal modello.
-    """
-    # radiazione giornaliera in kWh/m2:
-    # somma(W/m2 * 0.25 h) / 1000 -> kWh/m2
-    rad_kwh_m2 = float((df15["GlobalRad_W"].fillna(0) * 0.25).sum() / 1000.0)
-
-    cloud_mean = float(df15["CloudCover_P"].mean()) if "CloudCover_P" in df15.columns else 0.0
-    cloud_inv  = 100.0 - cloud_mean
-    dayofyear  = int(pd.Timestamp(day_dt).dayofyear)
-    month      = int(pd.Timestamp(day_dt).month)
-    rad_eff    = rad_kwh_m2 * (cloud_inv / 100.0)
-
-    X = pd.DataFrame([{
-        "G_M0_Wm2":  rad_kwh_m2,
-        "rad_eff":   rad_eff,
-        "cloud_inv": cloud_inv,
-        "dayofyear": dayofyear,
-        "month":     month
-    }])
-    return X[["G_M0_Wm2", "rad_eff", "cloud_inv", "dayofyear", "month"]]
-
-
-
-def evaluate_prediction_vs_real(real15, pred15, tz="Europe/Rome", apply_shift=0):
-    import pandas as pd, numpy as np
-    pred = pred15.copy()
-    if 'kWh_15m' in pred.columns: e = pred['kWh_15m']
-    elif 'kWh_curve' in pred.columns: e = pred['kWh_curve']
-    elif 'kW_inst' in pred.columns: e = pred['kW_inst'] / 4.0
-    else: raise ValueError("Nel dataset previsione manca 'kWh_15m' o 'kWh_curve' (o 'kW_inst').")
-    if apply_shift != 0: e = e.shift(apply_shift)
-    df = real15[['kWh_15m']].rename(columns={'kWh_15m':'kWh_real'}).join(e.rename('kWh_pred'), how='inner')
-    err = df['kWh_pred'] - df['kWh_real']
-    mae = float(err.abs().mean()); rmse = float(np.sqrt(np.mean(err**2))) if len(df) else float('nan')
-    mape = float((err.abs() / df['kWh_real'].replace(0, np.nan)).dropna().mean() * 100.0) if (df['kWh_real']>0).any() else float('nan')
-    r2 = float(np.corrcoef(df['kWh_real'], df['kWh_pred'])[0,1]**2) if len(df) > 1 else float('nan')
-    daily = df.resample('D').sum(); daily['abs_pct_err'] = (daily['kWh_pred'] - daily['kWh_real']).abs() / daily['kWh_real'].replace(0, np.nan) * 100.0
-    metrics = {'n_points_15m': int(len(df)), 'MAE_15m_kWh': mae, 'RMSE_15m_kWh': rmse, 'MAPE_15m_%': mape, 'R2': r2,
-               'MAE_daily_kWh': float((daily['kWh_pred'] - daily['kWh_real']).abs().mean()) if len(daily) else float('nan'),
-               'MAPE_daily_%': float(daily['abs_pct_err'].mean()) if len(daily) else float('nan'),
-               'Energy_real_kWh': float(df['kWh_real'].sum()), 'Energy_pred_kWh': float(df['kWh_pred'].sum())}
-    # --- TZ normalize: convert tz-aware to Europe/Rome and drop tz to avoid join errors ---
-    def _to_naive_local(idx):
-        try:
-            if getattr(idx, 'tz', None) is not None:
-                try:
-                    return idx.tz_convert(tz).tz_localize(None)
-                except Exception:
-                    return idx.tz_localize(None)
-        except Exception:
-            return idx
-        return idx
-
-    try:
-        if hasattr(real15, 'index'):
-            real15 = real15.copy()
-            real15.index = _to_naive_local(real15.index)
-        if hasattr(pred, 'index'):
-            pred = pred.copy()
-            pred.index = _to_naive_local(pred.index)
-    except Exception:
-        pass
-    
-    return metrics, df, daily
-
-
 
 st.set_page_config(page_title="ROBOTRONIX – Solar Forecast", layout="wide")
 
@@ -126,7 +27,6 @@ if not st.session_state["auth"]:
     st.stop()
 
 # ---------------- Config ----------------
-
 DATA_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
 MODEL_PATH = "pv_model.joblib"
 LOG_PATH = "forecast_log.csv"
@@ -166,77 +66,52 @@ def write_log(**row):
 def load_data():
     return pd.read_csv(DATA_PATH, parse_dates=["Date"])
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import mean_absolute_error, r2_score
-import joblib
-
 def train_model():
     df0 = load_data()
-
-    # Normalizzazione nomi colonne
     if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
-        df0 = df0.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
-
-    # Pulizia dati
-    df = df0.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
+        df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
+    df = df0.dropna(subset=["E_INT_Daily_kWh","G_M0_Wm2"])
     if df.empty:
         return float("nan"), float("nan"), None, None
-
-    # ---------------- FEATURE ENGINEERING ----------------
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df["dayofyear"] = df["Date"].dt.dayofyear
-        df["month"] = df["Date"].dt.month
-    else:
-        df["dayofyear"] = np.arange(len(df)) % 365
-        df["month"] = ((np.arange(len(df)) % 365) // 30) + 1
-
-    # CloudCover inversa e radiazione corretta
-    if "CloudCover_P" in df.columns:
-        df["cloud_inv"] = 100 - df["CloudCover_P"]
-        df["rad_eff"] = df["G_M0_Wm2"] * (df["cloud_inv"] / 100.0)
-    else:
-        df["cloud_inv"] = 100.0
-        df["rad_eff"] = df["G_M0_Wm2"]
-
-    # ---------------- DATASET E MODELLO ----------------
-    features = ["G_M0_Wm2", "rad_eff", "cloud_inv", "dayofyear", "month"]
-    target = "E_INT_Daily_kWh"
-
     train = df[df["Date"] < "2025-01-01"]
-    test = df[df["Date"] >= "2025-01-01"]
-    X_train, y_train = train[features], train[target]
-    X_test, y_test = test[features], test[target]
-
-    model = Pipeline([
-        ("scaler", StandardScaler()),
-        ("rf", RandomForestRegressor(
-            n_estimators=300,
-            max_depth=12,
-            random_state=42,
-            n_jobs=-1
-        ))
-    ])
-
-    model.fit(X_train, y_train)
+    test  = df[df["Date"] >= "2025-01-01"]
+    X_train, y_train = train[["G_M0_Wm2"]], train["E_INT_Daily_kWh"]
+    model = LinearRegression().fit(X_train, y_train)
     joblib.dump(model, MODEL_PATH)
-
-    if len(X_test) > 0:
-        y_pred = model.predict(X_test)
-        mae = float(mean_absolute_error(y_test, y_pred))
-        r2 = float(r2_score(y_test, y_pred))
-    else:
-        mae, r2 = float("nan"), float("nan")
-
-    st.info(f"✅ Modello RandomForest addestrato — MAE={mae:.2f} kWh, R²={r2:.3f}")
-    return mae, r2, model.named_steps["rf"].feature_importances_.tolist(), features
+    mae = r2 = float("nan")
+    if len(test) > 0:
+        y_pred = model.predict(test[["G_M0_Wm2"]])
+        mae = float(mean_absolute_error(test["E_INT_Daily_kWh"], y_pred))
+        r2  = float(r2_score(test["E_INT_Daily_kWh"], y_pred))
+    coef = float(model.coef_[0]) if hasattr(model, "coef_") else None
+    intercept = float(model.intercept_) if hasattr(model, "intercept_") else None
+    return mae, r2, coef, intercept
 
 def load_model():
     if not os.path.exists(MODEL_PATH):
         train_model()
     return joblib.load(MODEL_PATH)
+
+
+def overlay_correction(model):
+    """Small linear correction y_real ≈ alpha * y_hat + beta using the historical daily dataset.
+    Returns (alpha, beta). If anything fails, defaults to (1.0, 0.0)."""
+    try:
+        df0 = load_data()
+        if "E_INT_Daily_KWh" in df0.columns and "E_INT_Daily_kWh" not in df0.columns:
+            df0 = df0.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
+        df = df0.dropna(subset=["E_INT_Daily_kWh","G_M0_Wm2"]).copy()
+        if df.empty:
+            return 1.0, 0.0
+        y_hat = model.predict(df[["G_M0_Wm2"]]).reshape(-1, 1)
+        lr = LinearRegression().fit(y_hat, df["E_INT_Daily_kWh"])
+        alpha = float(lr.coef_[0]); beta = float(lr.intercept_)
+        # avoid pathological values
+        if not (0.2 <= alpha <= 5.0):
+            alpha = 1.0
+        return alpha, beta
+    except Exception:
+        return 1.0, 0.0
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None):
@@ -290,32 +165,20 @@ def compute_curve_and_daily(df, model, plant_kw):
     df["GlobalRad_W"] = df["GlobalRad_W"].clip(lower=0)
     df["CloudCover_P"] = df["CloudCover_P"].clip(lower=0, upper=100)
     df["rad_corr"] = df["GlobalRad_W"] * (1 - df["CloudCover_P"]/100.0)
-
-    # Data del giorno (prima riga)
-    try:
-        day_dt = pd.to_datetime(df["time"]).dt.date.iloc[0]
-    except Exception:
-        day_dt = pd.Timestamp.utcnow().date()
-
-    # Predizione giornaliera con 5 feature coerenti col modello
-    try:
-        X_day = build_daily_feature_row(df, day_dt)
-        pred_kwh = float(model.predict(X_day)[0]) if len(X_day) else 0.0
-    except Exception:
-        pred_kwh = 0.0
-
-    # Ripartizione della curva 15-min proporzionale alla radiazione corretta
     sum_rad = df["rad_corr"].sum()
-    if sum_rad > 0:
-        df["kWh_curve"] = pred_kwh * (df["rad_corr"] / sum_rad)
+    pred_kwh = float(model.predict([[sum_rad]])[0]) if sum_rad > 0 else 0.0
+    # Apply overlay correction so estimated and real overlap better
+    alpha, beta = overlay_correction(model)
+    pred_kwh = max(0.0, alpha * pred_kwh + beta)
+    if sum_rad > 0 and pred_kwh > 0:
+        df["kWh_curve"] = pred_kwh * (df["rad_corr"]/sum_rad)
     else:
         df["kWh_curve"] = 0.0
-
     df["kW_inst"] = df["kWh_curve"] * 4.0
     peak_kW = float(df["kW_inst"].max()) if len(df) else 0.0
     peak_pct = float(peak_kW/plant_kw*100.0) if plant_kw > 0 else 0.0
     cloud_mean = float(df["CloudCover_P"].mean()) if "CloudCover_P" in df.columns else float("nan")
-    return df, pred_kwh, peak_kW, peak_pct, cloud_mean
+    
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
     day = (datetime.now(timezone.utc).date() + timedelta(days=offset_days))
@@ -404,93 +267,47 @@ st.sidebar.write(f"Righe: {len(ldf)}")
 csv_io = io.StringIO(); ldf.to_csv(csv_io, index=False)
 st.sidebar.download_button("⬇️ Scarica log filtrato", csv_io.getvalue(), "forecast_log_filtered.csv", "text/csv")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa", "✅ Validazione"])
-
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsioni 4 giorni (15 min)","🗺️ Mappa"])
 
 
 with tab1:
-    with tab1:
-    st.subheader("📊 Storico produzione (kWh)")
-
     try:
-        # Carica dataset produzione
-        df_prod = pd.read_csv("Dataset_Daily_EnergiaSeparata_2020_2025.csv")
-
-        # Normalizza nomi e tipi
-        if "E_INT_Daily_KWh" in df_prod.columns:
-            df_prod = df_prod.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
-        if "Date" in df_prod.columns:
-            df_prod["Date"] = pd.to_datetime(df_prod["Date"], errors="coerce")
-
-        # Prepara dati e medie mobili 7 giorni
-        df_plot = df_prod[["Date", "E_INT_Daily_kWh", "G_M0_Wm2"]].dropna().copy()
-        df_plot = df_plot.sort_values("Date")
-        df_plot["E_INT_Daily_kWh_7d"] = df_plot["E_INT_Daily_kWh"].rolling(7, min_periods=1).mean()
-        df_plot["G_M0_Wm2_7d"] = df_plot["G_M0_Wm2"].rolling(7, min_periods=1).mean()
-
-        # --- Plotly interattivo (tema scuro, doppio asse) ---
-        fig = go.Figure()
-
-        # Produzione (asse sinistro)
-        fig.add_trace(go.Scatter(
-            x=df_plot["Date"],
-            y=df_plot["E_INT_Daily_kWh_7d"],
-            mode="lines",
-            name="Energia (kWh)",
-            line=dict(width=2)
-        ))
-
-        # Irradianza (asse destro)
-        fig.add_trace(go.Scatter(
-            x=df_plot["Date"],
-            y=df_plot["G_M0_Wm2_7d"],
-            mode="lines",
-            name="Irradianza (kWh/m²)",
-            line=dict(width=2, dash="dot"),
-            yaxis="y2"
-        ))
-
-        fig.update_layout(
-            title="Produzione reale + Irradianza (media mobile 7 giorni)",
-            xaxis=dict(title="Data"),
-            yaxis=dict(title="Energia (kWh)"),
-            yaxis2=dict(title="Irradianza (kWh/m²)", overlaying="y", side="right"),
-            hovermode="x unified",
-            template="plotly_dark",
-            margin=dict(l=50, r=50, t=50, b=50),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"Totale righe: {len(df_prod)} — Ultima data: {pd.to_datetime(df_prod['Date']).max().date()}")
-
+        df = load_data()
+        if "E_INT_Daily_KWh" in df.columns and "E_INT_Daily_kWh" not in df.columns:
+            df = df.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
+        model = load_model()
+        alpha, beta = overlay_correction(model)
+        # Stima in kWh usando il modello + correzione
+        y_hat = model.predict(df[["G_M0_Wm2"]])
+        df2 = df.copy()
+        df2["Produzione reale (kWh)"] = df2["E_INT_Daily_kWh"].clip(lower=0)
+        df2["Produzione stimata (kWh)"] = (alpha * y_hat + beta).clip(min=0)
+        long = df2[["Date","Produzione reale (kWh)","Produzione stimata (kWh)"]].melt("Date", var_name="Serie", value_name="kWh")
+        st.subheader("Storico produzione vs stima (kWh)")
+        ch = alt.Chart(long).mark_line().encode(
+            x=alt.X("Date:T", title="Data"),
+            y=alt.Y("kWh:Q", title="kWh"),
+            color="Serie:N",
+            tooltip=[alt.Tooltip("Date:T", title="Data"), alt.Tooltip("Serie:N"), alt.Tooltip("kWh:Q", title="kWh", format=".1f")]
+        ).interactive()
+        st.altair_chart(ch, use_container_width=True)
     except Exception as e:
-        st.error(f"Errore nel rendering del grafico: {e}")
-
-with tab2:
-
+        st.error(f"Impossibile caricare dataset: {e}")
 
 
 with tab2:
-    c1, c2 = st.columns([2, 1])
+    c1, c2, c3 = st.columns(3)
     if c1.button("Addestra / Riaddestra modello"):
-        mae, r2, importances, feat_names = train_model()
+        mae, r2, coef, intercept = train_model()
         st.success(f"Modello addestrato ✅  MAE: {mae:.2f} | R²: {r2:.3f}")
-        if importances is not None and feat_names is not None:
-            fig, ax = plt.subplots(figsize=(6, 3))
-            ax.barh(feat_names, importances)
-            ax.set_xlabel("Importanza")
-            ax.set_title("Feature importance (RandomForest)")
-            st.pyplot(fig)
+        if coef is not None and intercept is not None:
+            st.info(f"**Slope**: {coef:.6f}  |  **Intercept**: {intercept:.3f}")
     if os.path.exists(MODEL_PATH):
+        model = load_model()
         try:
-            model = load_model()
-            if hasattr(model, "named_steps") and "rf" in model.named_steps:
-                imps = model.named_steps["rf"].feature_importances_
-                names = ["G_M0_Wm2","rad_eff","cloud_inv","dayofyear","month"]
-                c2.markdown("**Importanza feature (modello attuale)**")
-                for n, v in zip(names, imps):
-                    c2.write(f"- {n}: {v:.3f}")
+            coef = float(model.coef_[0]); intercept = float(model.intercept_)
+            c2.metric("Slope (kWh per unità irradianza)", f"{coef:.6f}")
+            c3.metric("Intercept", f"{intercept:.3f}")
         except Exception:
             pass
 
@@ -499,7 +316,6 @@ with tab3:
     go = st.button("Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)")
     model = load_model()
     results = {}
-    st.session_state.setdefault('pred_curves', {})
 
     sections = {"Ieri": st.container(), "Oggi": st.container(), "Domani": st.container(), "Dopodomani": st.container()}
 
@@ -511,16 +327,7 @@ with tab3:
                     lat_sidebar, lon_sidebar, off, label, model, st.session_state["tilt"], st.session_state["orient"], provider_pref, plant_kw, autosave=autosave
                 )
                 results[label] = dfp
-                try:
-                    dfpp = dfp.copy()
-                    dfpp['time'] = pd.to_datetime(dfpp['time'], utc=True, errors='coerce')
-                    if hasattr(dfpp['time'].dt, 'tz'):
-                        dfpp['time'] = dfpp['time'].dt.tz_convert(tz).dt.tz_localize(None)
-                    st.session_state['pred_curves'][label] = dfpp
-                except Exception:
-                    st.session_state['pred_curves'][label] = dfp
                 st.caption(f"Provider: **{provider}** | Stato: **{status}**")
-                if url: st.code(url, language="text")
                 if dfp is None or dfp.empty:
                     st.warning("Nessun dato disponibile.")
                 else:
@@ -530,7 +337,15 @@ with tab3:
                     metr3.metric("% della targa", f"{peak_pct:.1f}%")
                     metr4.metric("Nuvolosità media", f"{cloud_mean:.0f}%")
                     chart_df = dfp.set_index("time")[["kWh_curve"]].rename(columns={"kWh_curve":"Produzione stimata (kWh/15min)"})
-                    st.line_chart(chart_df)
+                    
+# Grafico interattivo (kWh/15min) con tooltip data/ora
+ch = alt.Chart(chart_df.reset_index()).mark_line().encode(
+    x=alt.X("time:T", title="Data / Ora"),
+    y=alt.Y("Produzione stimata (kWh/15min):Q", title="kWh / 15 min"),
+    tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Produzione stimata (kWh/15min):Q", title="kWh (15m)", format=".3f")]
+).interactive()
+st.altair_chart(ch, use_container_width=True)
+
 
                     # Download curva 15-min (per-giorno)
                     csv_buf = io.StringIO()
@@ -555,7 +370,16 @@ with tab3:
                 comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
         if not comp.empty:
             comp = comp.set_index("time")
-            st.line_chart(comp)
+            
+long = comp.reset_index().melt("time", var_name="Giorno", value_name="kWh_15m")
+chc = alt.Chart(long).mark_line().encode(
+    x=alt.X("time:T", title="Data / Ora"),
+    y=alt.Y("kWh_15m:Q", title="kWh / 15 min"),
+    color="Giorno:N",
+    tooltip=[alt.Tooltip("time:T", title="Data/ora"), alt.Tooltip("Giorno:N"), alt.Tooltip("kWh_15m:Q", title="kWh (15m)", format=".3f")]
+).interactive()
+st.altair_chart(chc, use_container_width=True)
+
 
             # download unico delle 4 curve
             all_curves = pd.DataFrame()
@@ -584,84 +408,3 @@ with tab4:
     ).add_to(m)
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=550)
-
-
-
-with tab5:
-    st.subheader("✅ Validazione previsioni vs produzione reale")
-    st.caption("Carica un CSV con la produzione reale (SMA: separatore ';' e virgola decimale). Oppure usa le previsioni calcolate.")
-    real_file = st.file_uploader("CSV produzione reale", type=["csv"])
-    use_session_pred = st.toggle("Usa previsioni calcolate nel tab Previsioni", value=True)
-    tz_local = st.toggle("Usa fuso orario Europe/Rome (altrimenti UTC)", value=True)
-    tz = "Europe/Rome" if tz_local else "UTC"
-    pred_file = None if use_session_pred else st.file_uploader(
-        "CSV previsioni (opzionale)",
-        type=["csv"],
-        help="Colonna kWh_15m o kWh_curve (oppure kW_inst)"
-    )
-
-
-    if real_file is not None:
-        try:
-            df_real15, df_real_daily = normalize_real_csv(real_file)
-            st.success(f"Dati reali: {df_real15.index.min()} → {df_real15.index.max()}  ({len(df_real_daily)} giorni)")
-
-            pred_source = None
-            if use_session_pred and 'pred_curves' in st.session_state and len(st.session_state['pred_curves'])>0:
-                labels = list(st.session_state['pred_curves'].keys())
-                sel = st.selectbox("Scegli la previsione calcolata", labels, index=0)
-                pred_source = st.session_state['pred_curves'][sel].copy().set_index('time')
-            elif not use_session_pred and pred_file is not None:
-                import pandas as pd
-                pred_df = pd.read_csv(pred_file, parse_dates=['time']).set_index('time')
-                pred_source = pred_df
-            else:
-                st.info("Seleziona una previsione o carica un CSV con la curva prevista.")
-
-            if pred_source is not None:
-                lag = st.slider("Shift previsione (multipli di 15 minuti)", -8, 8, 0)
-                metrics, df_eval, df_daily = evaluate_prediction_vs_real(df_real15, pred_source, tz=tz, apply_shift=lag)
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("MAE (kWh / 15m)", f"{metrics['MAE_15m_kWh']:.3f}")
-                c2.metric("RMSE (kWh / 15m)", f"{metrics['RMSE_15m_kWh']:.3f}")
-                c3.metric("MAPE 15m (%)", f"{metrics['MAPE_15m_%']:.1f}%")
-                c4.metric("R²", f"{metrics['R2']:.3f}")
-                c5, c6 = st.columns(2)
-                c5.metric("Energia reale (kWh)", f"{metrics['Energy_real_kWh']:.1f}")
-                c6.metric("Energia prevista (kWh)", f"{metrics['Energy_pred_kWh']:.1f}")
-
-                plot = df_eval.reset_index().rename(columns={'index':'time'})
-                plot['time_str'] = plot['time'].dt.strftime('%Y-%m-%d %H:%M')
-                long = plot[['time','time_str','kWh_real','kWh_pred']].melt(['time','time_str'], var_name='Serie', value_name='kWh_15m')
-                ch = alt.Chart(long).mark_line().encode(
-                    x=alt.X('time:T', title='Data / Ora'),
-                    y=alt.Y('kWh_15m:Q', title='kWh / 15 min'),
-                    color='Serie:N',
-                    tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('Serie:N'), alt.Tooltip('kWh_15m:Q', title='kWh (15m)', format='.3f')]
-                ).interactive()
-                st.altair_chart(ch, use_container_width=True)
-
-                sc = alt.Chart(df_eval.reset_index()).mark_point().encode(
-                    x=alt.X('kWh_real:Q', title='Reale (kWh/15m)'),
-                    y=alt.Y('kWh_pred:Q', title='Prevista (kWh/15m)'),
-                    tooltip=[alt.Tooltip('time_str:N', title='Data/ora'), alt.Tooltip('kWh_real:Q'), alt.Tooltip('kWh_pred:Q')]
-                ).interactive()
-                st.altair_chart(sc, use_container_width=True)
-
-                dl = df_daily.reset_index().melt('time', var_name='Serie', value_name='kWh_day')
-                chd = alt.Chart(dl).mark_bar().encode(
-                    x=alt.X('time:T', title='Giorno'),
-                    y=alt.Y('kWh_day:Q', title='kWh (giorno)'),
-                    color='Serie:N'
-                )
-                st.altair_chart(chd, use_container_width=True)
-
-                import io
-                buf15 = io.StringIO(); df_eval.to_csv(buf15, index=True)
-                st.download_button("⬇️ Scarica confronto 15‑min (CSV)", buf15.getvalue(), file_name="confronto_15min.csv", mime="text/csv")
-                bufd = io.StringIO(); df_daily.to_csv(bufd, index=True)
-                st.download_button("⬇️ Scarica confronto giornaliero (CSV)", bufd.getvalue(), file_name="confronto_daily.csv", mime="text/csv")
-
-        except Exception as e:
-            st.error(f"Errore nel caricamento o confronto: {e}")
