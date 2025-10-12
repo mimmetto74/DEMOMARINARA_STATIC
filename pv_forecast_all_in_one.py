@@ -294,8 +294,12 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
     if autosave:
         # salva CSV curva 15min e aggregato giorno
         # Crea curva di previsione pulita
-    cols_available = [c for c in ["time","GlobalRad_W","CloudCover_P","Temp_Air","rad_corr","kWh_curve"] if c in df2.columns]
-    curve_csv = df2[cols_available].copy()
+           # Crea curva di previsione pulita (ignora colonne mancanti)
+        cols_available = [
+            c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve"]
+            if c in df2.columns
+        ]
+        curve_csv = df2[cols_available].copy()
         curve_csv.to_csv(os.path.join(LOG_DIR, f"curve_{label.lower()}_15min.csv"), index=False)
         agg_csv = pd.DataFrame([{
             "date": str(day),
