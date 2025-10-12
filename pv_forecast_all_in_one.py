@@ -249,8 +249,73 @@ def compute_curve_and_daily(df, model, plant_kw):
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
     day = (datetime.now(timezone.utc).date() + timedelta(days=offset_days))
-    start_iso = f"{day}T00:00:00Z"; end_iso = f"{day + timedelta(days=1)}T00:00:00Z"
-    provider = "Meteomatics"; status = "OK"; url = ""; df = None
+    start_iso = f"{day}T00:00:00Z"
+    end_iso = f"{day + timedelta(days=1)}T00:00:00Z"
+
+    provider = "Meteomatics"
+    status = "OK"
+    url = ""
+    df = None
+
+    def try_meteomatics():
+        try:
+            u, d = fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=tilt, orient=orient)
+            return u, d, "Meteomatics", "OK"
+        except Exception as e:
+            return "", None, "Meteomatics", f"ERROR: {e}"
+
+    def try_openmeteo():
+        try:
+            u, d = fetch_openmeteo_hourly(lat, lon, str(day), str(day + timedelta(days=1)))
+            return u, d, "Open-Meteo", "OK"
+        except Exception as e:
+            return "", None, "Open-Meteo", f"ERROR: {e}"
+
+    # Selezione provider
+    if provider_pref == "Meteomatics":
+        url, df, provider, status = try_meteomatics()
+        if df is None:
+            url, df, provider, status = try_openmeteo()
+    elif provider_pref == "Open-Meteo":
+        url, df, provider, status = try_openmeteo()
+    else:
+        url, df, provider, status = try_meteomatics()
+        if df is None:
+            url, df, provider, status = try_openmeteo()
+
+    # Controllo dati
+    if df is None or df.empty:
+        write_log(timestamp=datetime.utcnow().isoformat(), day_label=label,
+                  provider=provider, status=status, url=url, lat=lat, lon=lon,
+                  tilt=tilt, orient=orient, sum_rad_corr="", pred_kwh="",
+                  peak_kW="", cloud_mean="", note="no data")
+        return None, 0.0, 0.0, 0.0, float("nan"), provider, status, url
+
+    # Calcolo curva e predizione
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+    write_log(timestamp=datetime.utcnow().isoformat(), day_label=label,
+              provider=provider, status=status, url=url, lat=lat, lon=lon,
+              tilt=tilt, orient=orient, sum_rad_corr=float(df2["rad_corr"].sum()),
+              pred_kwh=float(pred_kwh), peak_kW=float(peak_kW),
+              cloud_mean=float(cloud_mean), note="")
+
+    # Salvataggio automatico
+    if autosave:
+        cols_available = [c for c in ["time", "GlobalRad_W", "CloudCover_P",
+                                      "Temp_Air", "rad_corr", "kWh_curve"]
+                          if c in df2.columns]
+        curve_csv = df2[cols_available].copy()
+        curve_csv.to_csv(os.path.join(LOG_DIR, f"curve_{label.lower()}_15min.csv"), index=False)
+        agg_csv = pd.DataFrame([{
+            "date": str(day),
+            "energy_kWh": float(pred_kwh),
+            "peak_kW": float(peak_kW),
+            "cloud_mean": float(cloud_mean)
+        }])
+        agg_csv.to_csv(os.path.join(LOG_DIR, f"daily_{label.lower()}.csv"), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
 
 def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
     """
