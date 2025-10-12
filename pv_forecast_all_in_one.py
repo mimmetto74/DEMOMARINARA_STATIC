@@ -210,20 +210,34 @@ def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
 def compute_curve_and_daily(df, model, plant_kw):
     if df is None or df.empty:
         return None, 0.0, 0.0, 0.0, float("nan")
+
     df = df.copy().sort_values("time")
     df["GlobalRad_W"] = df["GlobalRad_W"].clip(lower=0)
     df["CloudCover_P"] = df["CloudCover_P"].clip(lower=0, upper=100)
-    df["rad_corr"] = df["GlobalRad_W"] * (1 - df["CloudCover_P"]/100.0)
+    df["Temp_Air"] = df["Temp_Air"].fillna(df["Temp_Air"].mean())
+
+    # Calcolo radiazione corretta
+    df["rad_corr"] = df["GlobalRad_W"] * (1 - df["CloudCover_P"] / 100.0)
     sum_rad = df["rad_corr"].sum()
-    pred_kwh = float(model.predict([[sum_rad]])[0]) if sum_rad > 0 else 0.0
+    cloud_mean = df["CloudCover_P"].mean()
+    temp_mean = df["Temp_Air"].mean()
+
+    # Predizione del totale giornaliero (modello multivariato)
     if sum_rad > 0:
-        df["kWh_curve"] = pred_kwh * (df["rad_corr"]/sum_rad)
+        X_pred = [[sum_rad, cloud_mean, temp_mean]]
+        pred_kwh = float(model.predict(X_pred)[0])
+    else:
+        pred_kwh = 0.0
+
+    # Distribuzione nel tempo (solo per grafico 15 min)
+    if sum_rad > 0:
+        df["kWh_curve"] = pred_kwh * (df["rad_corr"] / sum_rad)
     else:
         df["kWh_curve"] = 0.0
-    df["kW_inst"] = df["kWh_curve"] * 4.0
-    peak_kW = float(df["kW_inst"].max()) if len(df) else 0.0
-    peak_pct = float(peak_kW/plant_kw*100.0) if plant_kw > 0 else 0.0
-    cloud_mean = float(df["CloudCover_P"].mean()) if "CloudCover_P" in df.columns else float("nan")
+
+    peak_kW = df["kWh_curve"].max() * 4  # 15 min → 1h
+    peak_pct = (peak_kW / plant_kw * 100) if plant_kw > 0 else 0.0
+
     return df, pred_kwh, peak_kW, peak_pct, cloud_mean
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
