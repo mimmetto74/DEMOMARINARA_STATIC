@@ -619,6 +619,7 @@ if not comp.empty:
 
             # download unico delle 4 curve
 # download unico delle 4 curve
+# download unico delle 4 curve
 all_curves = pd.DataFrame()
 
 for lbl, dfp in results.items():
@@ -632,13 +633,12 @@ for lbl, dfp in results.items():
         tmp["giorno"] = lbl
         all_curves = pd.concat([all_curves, tmp], ignore_index=True)
 
-
-            if not all_curves.empty:
-                buf_all = io.StringIO()
-                all_curves.to_csv(buf_all, index=False)
-                st.download_button("⬇️ Scarica TUTTE le curve (CSV unico)", buf_all.getvalue(), "all_curves_15min.csv", "text/csv")
-        else:
-            st.info("Nessuna curva disponibile per il confronto.")
+if not all_curves.empty:
+    buf_all = io.StringIO()
+    all_curves.to_csv(buf_all, index=False)
+    st.download_button("📦 Scarica TUTTE le curve (CSV unico)", buf_all.getvalue(), "all_curves_15min.csv", "text/csv")
+else:
+    st.info("Nessuna curva disponibile per il confronto.")
 
 with tab4:
     st.subheader("Mappa impianto (satellitare)")
