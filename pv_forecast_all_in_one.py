@@ -257,34 +257,35 @@ with tab1:
         # --- Grafico 1: Produzione (kWh) ---
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(
-            x=df["Date"], y=df["E_INT_Daily_kWh"],
-            mode='lines+markers',
-            name='Produzione (kWh)',
-            line=dict(color='orange', width=2)
+        x=df["Date"], y=df["E_INT_Daily_kWh"],
+        mode='lines+markers',
+        name='Produzione (kWh)',
+        line=dict(color='orange', width=2),
+        marker=dict(size=4, color='orange', opacity=0.6, line=dict(color='darkorange', width=1))
         ))
         fig1.update_layout(
-            title="⚡ Produzione giornaliera (kWh)",
-            xaxis_title="Data",
-            yaxis_title="Energia (kWh)",
-            template="plotly_white",
-            height=400
+        title="⚡ Produzione giornaliera (kWh)",
+        xaxis_title="Data",
+        yaxis_title="Energia (kWh)",
+        template="plotly_white",
+        height=400
         )
         st.plotly_chart(fig1, use_container_width=True)
 
-        # --- Grafico 2: Irradianza (W/m²) ---
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(
-            x=df["Date"], y=df["G_M0_Wm2"],
-            mode='lines+markers',
-            name='Irradianza (W/m²)',
-            line=dict(color='deepskyblue', width=2)
+        x=df["Date"], y=df["G_M0_Wm2"],
+        mode='lines+markers',
+        name='Irradianza (W/m²)',
+        line=dict(color='deepskyblue', width=2),
+        marker=dict(size=4, color='deepskyblue', opacity=0.6, line=dict(color='blue', width=1))
         ))
         fig2.update_layout(
-            title="☀️ Irradianza giornaliera (W/m²)",
-            xaxis_title="Data",
-            yaxis_title="W/m²",
-            template="plotly_white",
-            height=400
+        title="☀️ Irradianza giornaliera (W/m²)",
+        xaxis_title="Data",
+        yaxis_title="W/m²",
+        template="plotly_white",
+        height=400
         )
         st.plotly_chart(fig2, use_container_width=True)
 
