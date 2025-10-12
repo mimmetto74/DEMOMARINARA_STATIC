@@ -119,33 +119,48 @@ def load_model():
     return joblib.load(MODEL_PATH)
 
 @st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None):
+    # Parametri richiesti: radiazione, nuvolosità e temperatura
     if tilt is not None and orient is not None and tilt > 0:
         rad_param = f"global_rad_tilt_{int(round(tilt))}_orientation_{int(round(orient))}:W"
     else:
         rad_param = "global_rad:W"
-    url = (f"https://api.meteomatics.com/"
-           f"{start_iso}--{end_iso}:PT15M/"
-           f"{rad_param},total_cloud_cover:p/"
-           f"{lat},{lon}/json")
+
+    params = f"{rad_param},total_cloud_cover:p,t_2m:C"
+    url = f"https://api.meteomatics.com/{start_iso}--{end_iso}:PT15M/{params}/{lat},{lon}/json"
+
     r = requests.get(url, auth=(MM_USER, MM_PASS), timeout=30)
     r.raise_for_status()
     j = r.json()
+
     rows = []
     for blk in j.get("data", []):
         prm = blk.get("parameter")
-        if prm.endswith(":W"): prm = "GlobalRad_W"
-        if prm == "total_cloud_cover:p": prm = "CloudCover_P"
+        if prm.endswith(":W"):
+            prm = "GlobalRad_W"
+        elif prm == "total_cloud_cover:p":
+            prm = "CloudCover_P"
+        elif prm == "t_2m:C":
+            prm = "Temp_Air"
         for d in blk["coordinates"][0]["dates"]:
             rows.append({"time": d["date"], prm: d["value"]})
+
     df = pd.DataFrame(rows)
-    if df.empty: return url, df
-    df = df.groupby("time", as_index=False).mean().sort_values("time")
-    if "GlobalRad_W" not in df.columns: df["GlobalRad_W"] = np.nan
-    if "CloudCover_P" not in df.columns: df["CloudCover_P"] = np.nan
+    if df.empty:
+        return url, df
+
     df["time"] = pd.to_datetime(df["time"])
+    df = df.groupby("time", as_index=False).mean().sort_values("time")
+
+    # Aggiungi eventuali colonne mancanti
+    for col in ["GlobalRad_W", "CloudCover_P", "Temp_Air"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
     df["fonte"] = "Meteomatics"
     return url, df
+
 
 def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
     url = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
