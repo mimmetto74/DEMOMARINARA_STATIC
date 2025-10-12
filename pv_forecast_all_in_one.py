@@ -246,10 +246,20 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Storico","🛠️ Modello","🔮 Previsi
 with tab1:
     try:
         df = load_data()
-        st.subheader("Storico produzione (kWh) e irradianza (W/m²)")
+        st.subheader("Storico produzione e irradianza separati")
+
+        # Corregge eventuale differenza nel nome colonna
         if "E_INT_Daily_KWh" in df.columns and "E_INT_Daily_kWh" not in df.columns:
-            df = df.rename(columns={"E_INT_Daily_KWh":"E_INT_Daily_kWh"})
-        st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh","G_M0_Wm2"]])
+            df = df.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
+
+        # Grafico 1: Produzione (kWh)
+        st.markdown("#### ⚡ Produzione giornaliera (kWh)")
+        st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh"]])
+
+        # Grafico 2: Irradianza (W/m²)
+        st.markdown("#### ☀️ Irradianza giornaliera (W/m²)")
+        st.line_chart(df.set_index("Date")[["G_M0_Wm2"]])
+
     except Exception as e:
         st.error(f"Impossibile caricare dataset: {e}")
 
