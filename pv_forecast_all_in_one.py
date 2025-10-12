@@ -525,22 +525,26 @@ with tab3:
                                        file_name=f"daily_{label.replace('ò','o').lower()}.csv", mime="text/csv")
 
         # confronto + export unico
-        st.subheader("📊 Confronto curve (4 giorni, 15 min)")
-        comp = pd.DataFrame()
-        for lbl, dfp in results.items():
-            if dfp is not None and not dfp.empty:
-               # Rimuove riferimenti a colonne obsolete come kW_inst
-               
-            cols_ok = [
-               c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
-               if c in dfp.columns
-           ]
-             tmp = dfp[cols_ok].copy()
+# confronto + export unico
+st.subheader("📈 Confronto curve (4 giorni, 15 min)")
+comp = pd.DataFrame()
 
-            comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
-        if not comp.empty:
-            comp = comp.set_index("time")
-            st.line_chart(comp)
+for lbl, dfp in results.items():
+    if dfp is not None and not dfp.empty:
+        # Seleziona solo colonne esistenti (senza kW_inst)
+        cols_ok = [
+            c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
+            if c in dfp.columns
+        ]
+        tmp = dfp[cols_ok].copy()
+        tmp["giorno"] = lbl
+        all_curves = pd.concat([all_curves, tmp], ignore_index=True)
+
+comp = tmp if comp.empty else pd.merge(comp, tmp, on="time", how="outer")
+if not comp.empty:
+    comp = comp.set_index("time")
+    st.line_chart(comp)
+
 
             # download unico delle 4 curve
             all_curves = pd.DataFrame()
