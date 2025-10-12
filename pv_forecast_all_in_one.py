@@ -252,6 +252,77 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
     start_iso = f"{day}T00:00:00Z"; end_iso = f"{day + timedelta(days=1)}T00:00:00Z"
     provider = "Meteomatics"; status = "OK"; url = ""; df = None
 
+def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
+    """
+    Confronta la curva prevista con quella reale (dal CSV storico).
+    Ritorna grafico Plotly e metriche di errore (MAE, MAPE).
+    """
+    import plotly.graph_objects as go
+    from sklearn.metrics import mean_absolute_error
+
+    # Carica dataset storico
+    try:
+        df_real = pd.read_csv(data_path, parse_dates=["Date"])
+    except Exception as e:
+        st.warning(f"⚠️ Errore nel caricamento dati storici: {e}")
+        return None, None, None
+
+    # Trova giorno corrispondente
+    if "time" not in forecast_df.columns:
+        st.warning("⚠️ Il dataframe di previsione non contiene la colonna 'time'.")
+        return None, None, None
+
+    forecast_date = pd.to_datetime(forecast_df["time"].iloc[0]).date()
+    df_real_day = df_real[df_real["Date"].dt.date == forecast_date]
+
+    if df_real_day.empty:
+        st.warning(f"⚠️ Nessun dato reale trovato per {forecast_date}.")
+        return None, None, None
+
+    # Calcolo energia reale e curva media (approssimazione)
+    energy_real = df_real_day["E_INT_Daily_kWh"].values[0] if "E_INT_Daily_kWh" in df_real_day.columns else np.nan
+
+    # Prepara la curva prevista
+    forecast_df = forecast_df.copy()
+    forecast_df["Potenza_kW_prevista"] = forecast_df["kWh_curve"] * 4
+
+    # Normalizza in base all’energia reale per confronto visivo
+    if not np.isnan(energy_real):
+        energy_prev = forecast_df["Potenza_kW_prevista"].sum() / 4  # somma 15min -> kWh
+        scale_factor = energy_real / energy_prev if energy_prev > 0 else 1.0
+        forecast_df["Potenza_kW_prevista"] *= scale_factor
+
+    # Crea grafico
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=forecast_df["time"], y=forecast_df["Potenza_kW_prevista"],
+        mode="lines", name="Previsione (kW)", line=dict(color="orange", width=2)
+    ))
+
+    if "Potenza_reale_kW" in df_real_day.columns:
+        fig.add_trace(go.Scatter(
+            x=forecast_df["time"], y=df_real_day["Potenza_reale_kW"].values[:len(forecast_df)],
+            mode="lines", name="Reale (kW)", line=dict(color="blue", width=2)
+        ))
+
+        # Calcolo errore
+        y_true = df_real_day["Potenza_reale_kW"].values[:len(forecast_df)]
+        y_pred = forecast_df["Potenza_kW_prevista"].values[:len(y_true)]
+        mae = mean_absolute_error(y_true, y_pred)
+        mape = np.mean(np.abs((y_true - y_pred) / np.maximum(y_true, 1e-3))) * 100
+    else:
+        mae, mape = np.nan, np.nan
+
+    fig.update_layout(
+        title=f"📊 Confronto previsione vs reale – {day_label}",
+        xaxis_title="Ora",
+        yaxis_title="Potenza (kW)",
+        template="plotly_white",
+        height=350,
+    )
+
+    return fig, mae, mape
+
     def try_meteomatics():
         nonlocal url, df, provider, status
         try:
@@ -547,17 +618,20 @@ if not comp.empty:
 
 
             # download unico delle 4 curve
-            all_curves = pd.DataFrame()
-            for lbl, dfp in results.items():
-        if dfp is not None and not dfp.empty:
+# download unico delle 4 curve
+all_curves = pd.DataFrame()
+
+for lbl, dfp in results.items():
+    if dfp is not None and not dfp.empty:
         # Seleziona solo colonne esistenti (senza kW_inst)
-           cols_ok = [
-              c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
-              if c in dfp.columns
-         ]
-         tmp = dfp[cols_ok].copy()
-         tmp["giorno"] = lbl
-         all_curves = pd.concat([all_curves, tmp], ignore_index=True)
+        cols_ok = [
+            c for c in ["time", "GlobalRad_W", "CloudCover_P", "Temp_Air", "rad_corr", "kWh_curve", "Potenza_kW"]
+            if c in dfp.columns
+        ]
+        tmp = dfp[cols_ok].copy()
+        tmp["giorno"] = lbl
+        all_curves = pd.concat([all_curves, tmp], ignore_index=True)
+
 
             if not all_curves.empty:
                 buf_all = io.StringIO()
