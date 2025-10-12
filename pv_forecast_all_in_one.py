@@ -161,6 +161,35 @@ def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None
     df["fonte"] = "Meteomatics"
     return url, df
 
+def update_daily_dataset(lat=DEFAULT_LAT, lon=DEFAULT_LON, days_back=7):
+    """
+    Scarica gli ultimi N giorni di dati Meteomatics e aggiorna il dataset CSV giornaliero.
+    """
+    end_date = datetime.utcnow().replace(tzinfo=timezone.utc)
+    start_date = end_date - timedelta(days=days_back)
+    start_iso = start_date.strftime("%Y-%m-%dT00:00:00Z")
+    end_iso = end_date.strftime("%Y-%m-%dT23:59:00Z")
+
+    url, df = fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso,
+                                      tilt=st.session_state.get("tilt", 0),
+                                      orient=st.session_state.get("orient", 180))
+
+    if df.empty:
+        st.warning("⚠️ Nessun dato Meteomatics disponibile.")
+        return
+
+    # Aggrega per giorno
+    df_daily = df.resample("1D", on="time").mean(numeric_only=True).reset_index()
+    df_daily["Date"] = df_daily["time"].dt.date
+    df_daily = df_daily[["Date", "GlobalRad_W", "CloudCover_P", "Temp_Air"]]
+
+    # Carica dataset esistente e aggiorna
+    df_existing = pd.read_csv(DATA_PATH, parse_dates=["Date"])
+    df_existing["Date"] = df_existing["Date"].dt.date
+    df_combined = pd.concat([df_existing, df_daily]).drop_duplicates(subset=["Date"], keep="last")
+    df_combined.to_csv(DATA_PATH, index=False)
+
+    st.success(f"✅ Dataset aggiornato con {len(df_daily)} nuovi giorni da Meteomatics")
 
 def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
     url = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
