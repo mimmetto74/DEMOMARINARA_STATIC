@@ -22,7 +22,7 @@ def render_login():
         if u == APP_USER and p == APP_PASS:
             st.session_state['authenticated'] = True
             st.success('Accesso effettuato!')
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error('❌ Credenziali non valide')
 
