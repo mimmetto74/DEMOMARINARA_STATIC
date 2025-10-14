@@ -315,7 +315,7 @@ with tab3:
                 results[label] = dfp
                 st.markdown(f'### {label}')
                 st.caption(f'Provider: {provider} | Stato: {status}')
-                st.code(url or '', language='text')
+                # st.code(url or '', language='text')
                 if dfp is not None and not dfp.empty:
                     # 📈 Anteprima diagnostica dati provider
                     with st.expander('📈 Meteomatics/Open-Meteo: anteprima dati grezzi'):
