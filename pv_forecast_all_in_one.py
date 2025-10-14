@@ -43,8 +43,8 @@ DEFAULT_ORIENT = float(os.environ.get('PV_ORIENT', '180'))
 DEFAULT_PLANT_KW = float(os.environ.get('PV_PLANT_KW', '947.25'))
 
 # ----------------------- METEOMATICS CREDENTIALS (embedded) ----------------------- #
-MM_USER = 'teseospa-eiffageenergiesystemesitaly_daniello_fabio'
-MM_PASS = '6S8KTHPbrUlp6523T9Xd'
+MM_USER = 'robotronixsrl_daniello_fabio'
+MM_PASS = 'xaRVRh8sa5EV70F0B88u'
 
 # -------------------------- UTILITIES -------------------------- #
 def write_log(**kwargs):
