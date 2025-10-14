@@ -40,7 +40,7 @@ DEFAULT_LAT = float(os.environ.get('PV_LAT', '40.643278'))
 DEFAULT_LON = float(os.environ.get('PV_LON', '16.986083'))
 DEFAULT_TILT = float(os.environ.get('PV_TILT', '10'))
 DEFAULT_ORIENT = float(os.environ.get('PV_ORIENT', '180'))
-DEFAULT_PLANT_KW = float(os.environ.get('PV_PLANT_KW', '947,25'))
+DEFAULT_PLANT_KW = float(os.environ.get('PV_PLANT_KW', '947.25'))
 
 # ----------------------- METEOMATICS CREDENTIALS (embedded) ----------------------- #
 MM_USER = 'teseospa-eiffageenergiesystemesitaly_daniello_fabio'
