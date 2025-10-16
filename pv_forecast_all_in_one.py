@@ -415,39 +415,43 @@ with tab3:
                 st.download_button('📦 Scarica TUTTE le curve (CSV unico)', buf_all.getvalue(), 'all_curves_15min.csv', 'text/csv')
             else: st.info('Nessuna curva disponibile per il confronto.')
 
-# ---- TAB 4: Map (placeholder) ---- #
-# ---- TAB 4: Mappa ---- #
+
 # ---- TAB 4: Mappa (satellitare) ---- #
+# ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
 with tab4:
-    st.subheader('🗺️ Localizzazione impianto fotovoltaico')
-    st.write('Visualizzazione satellitare del sito di produzione.')
+    st.subheader("🛰️ Localizzazione impianto fotovoltaico (vista satellitare)")
+    st.write("Visualizzazione satellitare ad alta risoluzione tramite Esri World Imagery.")
 
-    lat = st.session_state.get('lat', DEFAULT_LAT)
-    lon = st.session_state.get('lon', DEFAULT_LON)
+    # Recupera coordinate correnti dalla sessione
+    lat = float(st.session_state.get('lat', DEFAULT_LAT))
+    lon = float(st.session_state.get('lon', DEFAULT_LON))
 
-    # Mostra le coordinate attuali
+    # Mostra coordinate testuali
     st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
 
-    # Layer Pydeck: punto posizione impianto
-    import pydeck as pdk
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=pd.DataFrame({'lat': [lat], 'lon': [lon]}),
-        get_position='[lon, lat]',
-        get_color='[255, 165, 0, 220]',  # arancione semi-trasparente
-        get_radius=60,
+    # Import Folium e Streamlit-Folium
+    from streamlit_folium import st_folium
+    import folium
+
+    # Crea la mappa satellitare
+    m = folium.Map(
+        location=[lat, lon],
+        zoom_start=17,
+        tiles='Esri.WorldImagery',  # layer satellitare ad alta risoluzione
+        attr='Tiles © Esri'
     )
 
-    # Stato della vista (zoom centrato sul sito)
-    view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=16, pitch=0)
+    # Aggiungi marker dell’impianto
+    folium.Marker(
+        [lat, lon],
+        popup=f"Impianto fotovoltaico<br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
+        tooltip="Impianto fotovoltaico",
+        icon=folium.Icon(color='orange', icon='bolt', prefix='fa')
+    ).add_to(m)
 
-    # Mappa con sfondo satellitare
-    st.pydeck_chart(pdk.Deck(
-        map_style='mapbox://styles/mapbox/satellite-v9',
-        initial_view_state=view_state,
-        layers=[layer],
-        tooltip={"text": "Impianto fotovoltaico\nLat: {lat}\nLon: {lon}"}
-    ))
+    # Mostra la mappa nella pagina Streamlit
+    st_folium(m, width=900, height=500)
+
 # ---- TAB 5: Stabilità previsioni ---- #
 with tab5:
     st.subheader('🛡️ Monitoraggio stabilità delle previsioni (ogni 15 minuti)')
