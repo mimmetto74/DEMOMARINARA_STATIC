@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title='Solar Forecast - ROBOTRONIX for IMEPOWER (SECURE)', layout='wide')
+st.set_page_config(page_title='Solar Forecast - ROBOTRONIX for IMEPOWER', layout='wide')
 
 # ---------------------------- SECURITY / LOGIN ---------------------------- #
 APP_USER = os.environ.get('APP_USER', 'admin')
