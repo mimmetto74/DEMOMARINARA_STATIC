@@ -364,5 +364,31 @@ with tab3:
             else: st.info('Nessuna curva disponibile per il confronto.')
 
 # ---- TAB 4: Map (placeholder) ---- #
+# ---- TAB 4: Mappa ---- #
+with tab4:
+    st.subheader('🗺️ Localizzazione impianto fotovoltaico')
+    st.write('Posizione geografica del sito di produzione energetica.')
+
+    lat = st.session_state.get('lat', DEFAULT_LAT)
+    lon = st.session_state.get('lon', DEFAULT_LON)
+
+    # Mostra le coordinate
+    st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
+
+    # Mostra la mappa interattiva
+    st.map(pd.DataFrame({'lat': [lat], 'lon': [lon]}), zoom=13, use_container_width=True)
+
+    # (Opzionale) Aggiungi mappa più evoluta con Pydeck
+    import pydeck as pdk
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=pd.DataFrame({'lat': [lat], 'lon': [lon]}),
+        get_position='[lon, lat]',
+        get_color='[255, 165, 0, 180]',
+        get_radius=80,
+    )
+    view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=14, pitch=0)
+    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state))
+
 with tab4:
     st.info('Mappa/Localizzazione: usa i controlli nel tab Previsioni per cambiare lat/lon/tilt/orient.')
