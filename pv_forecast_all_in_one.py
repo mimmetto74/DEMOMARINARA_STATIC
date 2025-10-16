@@ -218,46 +218,80 @@ def train_model():
     return mae, r2
 
 # ------------------- DAILY CURVE & FORECAST ------------------- #
+
 def compute_curve_and_daily(df, model, plant_kw):
     """
-    Calcola la curva di produzione stimata a partire dai dati meteo,
-    restituisce un DataFrame con colonne aggiuntive:
-    - rad_corr (irradianza corretta per tilt/orient)
-    - kWh_curve (produzione stimata)
-    e statistiche giornaliere.
+    Calcola la curva di produzione stimata a partire dai dati meteo.
+    Restituisce:
+        - df con colonne 'rad_corr' e 'kWh_curve'
+        - energia totale (kWh), picco (kW), picco %, e media copertura nuvolosa
     """
     import numpy as np
     import pandas as pd
 
-    if df is None or df.empty or 'GlobalRad_W' not in df.columns:
+    # --- Validazioni iniziali ---
+    if df is None or df.empty:
+        return df, 0.0, 0.0, 0.0, 0.0
+
+    if 'GlobalRad_W' not in df.columns and 'G_M0_Wm2' not in df.columns:
+        st.warning("⚠️ Nessuna colonna di irradianza trovata nel dataset.")
         return df, 0.0, 0.0, 0.0, 0.0
 
     # --- Calcolo irradianza corretta ---
     if 'rad_corr' not in df.columns:
-        df['rad_corr'] = df['GlobalRad_W']
+        if 'GlobalRad_W' in df.columns:
+            df['rad_corr'] = df['GlobalRad_W']
+        elif 'G_M0_Wm2' in df.columns:
+            df['rad_corr'] = df['G_M0_Wm2']
+        else:
+            df['rad_corr'] = 0.0
 
-    # --- Ordina per tempo e pulisci ---
+    # --- Parsing e ordinamento temporale ---
     df['time'] = pd.to_datetime(df['time'], errors='coerce')
-    df = df.sort_values('time').dropna(subset=['time', 'rad_corr']).copy()
+    df = df.dropna(subset=['time']).sort_values('time')
 
-    # ✅ Considera solo colonne numeriche prima del resample
+    # --- Considera solo colonne numeriche prima del resample ---
     num_cols = df.select_dtypes(include=[np.number]).columns
     df = df.set_index('time')[num_cols].resample('15T', label='left', closed='left').mean().reset_index()
 
-    # --- Se il modello esiste, usa la previsione ---
+    # --- Predizione con modello (se disponibile) ---
     if model is not None:
-        features = ['GlobalRad_W', 'CloudCover_P', 'Temp_Air']
-        features = [f for f in features if f in df.columns]
+        # Recupera le feature usate in training
+        model_features = getattr(model, "feature_names_in_", None)
+
+        # Se il modello era stato addestrato con "G_M0_Wm2", rinomina
+        if model_features is not None and "G_M0_Wm2" in model_features and "GlobalRad_W" in df.columns:
+            df = df.rename(columns={'GlobalRad_W': 'G_M0_Wm2'})
+
+        # Se il modello era stato addestrato con "GlobalRad_W", rinomina eventuale "G_M0_Wm2"
+        elif model_features is not None and "GlobalRad_W" in model_features and "G_M0_Wm2" in df.columns:
+            df = df.rename(columns={'G_M0_Wm2': 'GlobalRad_W'})
+
+        # Seleziona solo le feature compatibili
+        if model_features is not None:
+            features = [f for f in model_features if f in df.columns]
+        else:
+            features = [c for c in ['GlobalRad_W', 'G_M0_Wm2', 'CloudCover_P', 'Temp_Air'] if c in df.columns]
+
         X = df[features].fillna(0)
-        df['kWh_curve'] = model.predict(X)
+
+        try:
+            df['kWh_curve'] = model.predict(X)
+        except ValueError as e:
+            st.warning(f"⚠️ Mismatch colonne modello: {e}. Riprovo adattando i nomi.")
+            if hasattr(model, "feature_names_in_"):
+                cols = list(model.feature_names_in_)
+                X = X.reindex(columns=cols, fill_value=0)
+            df['kWh_curve'] = model.predict(X)
     else:
-        # fallback proporzionale all'irradianza
-        df['kWh_curve'] = df['rad_corr'] * (plant_kw / 1000.0) / df['rad_corr'].max()
+        # --- Fallback lineare proporzionale all’irradianza ---
+        ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'G_M0_Wm2'
+        df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max(df[ref_col].max(), 1)
 
     # --- Smussamento centrato per evitare shift ---
     df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
 
-    # --- Metriche giornaliere ---
+    # --- Calcolo metriche giornaliere ---
     pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)  # ogni passo = 15 min
     peak_kW = df['kWh_curve'].max()
     peak_pct = 100 * peak_kW / plant_kw if plant_kw > 0 else np.nan
