@@ -276,11 +276,18 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
     # ✅ --- NOVITÀ: conversione orario UTC → ora locale italiana ---
+    # ✅ Conversione robusta UTC → Europe/Rome
     try:
         from zoneinfo import ZoneInfo
-        df['time'] = pd.to_datetime(df['time']).dt.tz_localize('UTC').dt.tz_convert('Europe/Rome')
+        df['time'] = pd.to_datetime(df['time'])
+        if df['time'].dt.tz is None:
+        # Se non ha timezone, aggiungiamo UTC
+           df['time'] = df['time'].dt.tz_localize('UTC')
+    # In entrambi i casi, convertiamo in ora italiana
+        df['time'] = df['time'].dt.tz_convert('Europe/Rome')
     except Exception as e:
         st.warning(f"⚠️ Impossibile convertire timezone: {e}")
+
 
     # --- Calcolo curve e parametri ---
     df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
