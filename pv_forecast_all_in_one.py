@@ -286,32 +286,29 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
     # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive)
-    # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive)
-tz_status = "unknown"
-try:
-    import pytz
-    tz_local = pytz.timezone("Europe/Rome")
+    tz_status = "unknown"
+    try:
+        import pytz
+        tz_local = pytz.timezone("Europe/Rome")
 
-    # parsing robusto con gestione UTC
-    times = pd.to_datetime(df['time'], errors='coerce')
+        # parsing robusto con gestione UTC
+        times = pd.to_datetime(df['time'], errors='coerce')
 
-    # se il risultato non ha info di fuso, assumiamo UTC
-    if times.dt.tz is None:
-        times = times.dt.tz_localize(pytz.UTC)
+        # se il risultato non ha info di fuso, assumiamo UTC
+        if times.dt.tz is None:
+            times = times.dt.tz_localize(pytz.UTC)
 
-    # converte in ora italiana
-    times = times.dt.tz_convert(tz_local)
+        # converte in ora italiana
+        times = times.dt.tz_convert(tz_local)
 
-    # rimuove info di fuso per evitare shift nei grafici
-    df['time'] = times.dt.tz_localize(None)
+        # rimuove info di fuso per evitare shift nei grafici
+        df['time'] = times.dt.tz_localize(None)
 
-    # salva info fuso per log
-    tz_status = "UTC→Europe/Rome (naive per grafico)"
-
-except Exception as e:
-    tz_status = f"error: {e}"
-    st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
-
+        # salva info fuso per log
+        tz_status = "UTC→Europe/Rome (naive per grafico)"
+    except Exception as e:
+        tz_status = f"error: {e}"
+        st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
 
     # --- Calcolo curve e parametri ---
     df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
@@ -346,6 +343,7 @@ except Exception as e:
         }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
 
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
 
     # ✅ Conversione robusta UTC → Europe/Rome
     try:
