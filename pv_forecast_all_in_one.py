@@ -276,19 +276,19 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
     # ✅ Conversione robusta e intelligente UTC → Europe/Rome
-try:
-    from zoneinfo import ZoneInfo
-    df['time'] = pd.to_datetime(df['time'], utc=True, errors='coerce')
+    try:
+        from zoneinfo import ZoneInfo
+         df['time'] = pd.to_datetime(df['time'], utc=True, errors='coerce')
 
     # Se i dati Meteomatics sono già locali (offset != 0), non toccarli
-    if df['time'].dt.tz is not None and not (df['time'].dt.tz == ZoneInfo('UTC')):
-        pass  # Già con timezone locale, nessuna conversione
-    else:
+        if df['time'].dt.tz is not None and not (df['time'].dt.tz == ZoneInfo('UTC')):
+            pass  # Già con timezone locale, nessuna conversione
+        else:
         # Se sono UTC o naive, converti a Europe/Rome
-        df['time'] = df['time'].dt.tz_convert('Europe/Rome')
+            df['time'] = df['time'].dt.tz_convert('Europe/Rome')
 
-except Exception as e:
-    st.warning(f"⚠️ Conversione timezone saltata: {e}")
+    except Exception as e:
+       st.warning(f"⚠️ Conversione timezone saltata: {e}")
 
 
     # --- Calcolo curve e parametri ---
