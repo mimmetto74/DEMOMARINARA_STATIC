@@ -365,30 +365,34 @@ with tab3:
 
 # ---- TAB 4: Map (placeholder) ---- #
 # ---- TAB 4: Mappa ---- #
+# ---- TAB 4: Mappa (satellitare) ---- #
 with tab4:
     st.subheader('🗺️ Localizzazione impianto fotovoltaico')
-    st.write('Posizione geografica del sito di produzione energetica.')
+    st.write('Visualizzazione satellitare del sito di produzione.')
 
     lat = st.session_state.get('lat', DEFAULT_LAT)
     lon = st.session_state.get('lon', DEFAULT_LON)
 
-    # Mostra le coordinate
+    # Mostra le coordinate attuali
     st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
 
-    # Mostra la mappa interattiva
-    st.map(pd.DataFrame({'lat': [lat], 'lon': [lon]}), zoom=13, use_container_width=True)
-
-    # (Opzionale) Aggiungi mappa più evoluta con Pydeck
+    # Layer Pydeck: punto posizione impianto
     import pydeck as pdk
     layer = pdk.Layer(
         "ScatterplotLayer",
         data=pd.DataFrame({'lat': [lat], 'lon': [lon]}),
         get_position='[lon, lat]',
-        get_color='[255, 165, 0, 180]',
-        get_radius=80,
+        get_color='[255, 165, 0, 220]',  # arancione semi-trasparente
+        get_radius=60,
     )
-    view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=14, pitch=0)
-    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state))
 
-with tab4:
-    st.info('Mappa/Localizzazione: usa i controlli nel tab Previsioni per cambiare lat/lon/tilt/orient.')
+    # Stato della vista (zoom centrato sul sito)
+    view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=16, pitch=0)
+
+    # Mappa con sfondo satellitare
+    st.pydeck_chart(pdk.Deck(
+        map_style='mapbox://styles/mapbox/satellite-v9',
+        initial_view_state=view_state,
+        layers=[layer],
+        tooltip={"text": "Impianto fotovoltaico\nLat: {lat}\nLon: {lon}"}
+    ))
