@@ -748,10 +748,9 @@ with tab4:
 # ---- TAB 5: Stabilità previsioni ---- #
 # ---- TAB 5: Stabilità previsioni ---- #
 with tab5:
-    import time
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    import pytz
+    import random
 
     st.subheader('🛡️ Monitoraggio stabilità delle previsioni (ogni 15 minuti)')
     st.caption(
@@ -766,28 +765,21 @@ with tab5:
     soglia_kwh = col2.number_input('Soglia calo energia (kWh)', 0.0, 1000.0, 50.0, 10.0)
     email_rcpt = col3.text_input('Email per allerta (opzionale)', value='')
 
-    # --- Controllo manuale ---
-    st.markdown("### 🔄 Controllo manuale")
-    st.caption("Premi per eseguire subito il controllo di stabilità previsioni.")
-    do_check = st.button('🔍 Controlla ora')
-
-    # --- Funzione di simulazione del controllo di stabilità ---
+    # --- Simulazione del controllo di stabilità ---
     def check_forecast_stability(lat, lon, soglia_pct, soglia_kwh):
         """Simula un controllo di stabilità, in futuro qui leggeremo dati reali dalle API."""
-        import random
         diff_pct = random.uniform(0, 50)
         diff_kwh = random.uniform(0, 200)
         return diff_pct, diff_kwh
 
-    # --- Funzione di notifica (placeholder) ---
+    # --- Notifica (placeholder) ---
     def send_email_alert(email, subject, message):
-        """Semplice placeholder per invio email"""
         if email:
             st.info(f"📧 Email inviata a {email}: {subject}")
         else:
             st.info("📢 Notifica generata (email non impostata).")
 
-    # --- Funzione di esecuzione del controllo (riusata da manuale e automatico) ---
+    # --- Esecuzione controllo ---
     def run_stability_check(manual=False):
         diff_pct, diff_kwh = check_forecast_stability(
             st.session_state['lat'],
@@ -810,18 +802,16 @@ with tab5:
 
         st.session_state['last_check'] = now_local
 
-    # --- Esecuzione manuale ---
+    # --- Controllo manuale ---
+    st.markdown("### 🔄 Controllo manuale")
+    st.caption("Premi per eseguire subito il controllo di stabilità previsioni.")
+    do_check = st.button('🔍 Controlla ora')
+
     if do_check:
         with st.spinner("🔍 Analisi in corso..."):
             run_stability_check(manual=True)
 
     # --- Controllo automatico ogni 15 minuti ---
-    import streamlit_analytics
-    import streamlit_autorefresh
-
-    # Ricarica automatica ogni 15 minuti (900.000 ms)
-    streamlit_autorefresh = st.experimental_rerun  # fallback in caso di versione vecchia
-
     st.markdown("### ⚙️ Controllo automatico")
     st.caption("Il controllo viene eseguito ogni 15 minuti automaticamente in background.")
     auto_check = st.checkbox("🕒 Attiva controllo automatico ogni 15 minuti", value=True)
@@ -838,6 +828,6 @@ with tab5:
                 st.session_state['last_auto_check'] = now_local
                 st.success(f"🕒 Controllo automatico eseguito alle {now_local.strftime('%H:%M:%S')}")
 
-    # --- Mostra stato ultimo controllo ---
+    # --- Stato ultimo controllo ---
     if 'last_check' in st.session_state:
         st.caption(f"🕒 Ultimo controllo: {st.session_state['last_check']}")
