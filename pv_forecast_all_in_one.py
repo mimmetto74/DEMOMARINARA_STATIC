@@ -463,23 +463,38 @@ with tab5:
     soglia_kwh = col2.number_input('Soglia calo energia (kWh)', value=50.0, min_value=0.0, step=10.0, format='%.1f')
     email_rcpt = col3.text_input('Email per allerta (opzionale)', value=os.environ.get('ALERT_EMAIL_TO', ''))
 
-    # Auto-refresh ogni 15 minuti mentre il tab è aperto
-   # Auto-refresh ogni 15 minuti mentre il tab è aperto
-try:
-    from streamlit_autorefresh import st_autorefresh
-    count = st_autorefresh(interval=15 * 60 * 1000, key='stability_autorefresh')
-    st.caption('⏱️ Aggiornamento automatico attivo: ogni 15 minuti.')
-except ImportError:
-    # Se il modulo non è installato, mostra messaggio e continua
-    st.caption('⏱️ Aggiornamento automatico non disponibile: installa "streamlit-autorefresh" oppure usa "Controlla ora".')
-except Exception as e:
-    # Se altro errore, tenta comunque il rerun solo se disponibile
-    try:
-        st.rerun()
-    except Exception:
-        st.caption('⚠️ Auto-refresh non disponibile: usa "Controlla ora".')
+   
+   # --- Controllo manuale della stabilità --- #
+st.markdown("### 🔄 Controllo manuale della stabilità previsioni")
+st.caption("Premi il pulsante per verificare se le previsioni meteo aggiornate cambiano significativamente la produzione attesa.")
 
-    # Stato attuale (dalla sessione / impostazioni esistenti)
+# Bottone per eseguire subito il controllo
+do_check = st.button('🔍 Controlla ora')
+
+# Mostra timestamp dell’ultimo controllo, se disponibile
+if 'last_check' in st.session_state:
+    st.caption(f"🕓 Ultimo controllo: {st.session_state['last_check']}")
+else:
+    st.caption("🕓 Nessun controllo effettuato ancora.")
+
+# Stato attuale (dalla sessione / impostazioni esistenti)
+lat = float(st.session_state.get('lat', DEFAULT_LAT))
+lon = float(st.session_state.get('lon', DEFAULT_LON))
+tilt = float(st.session_state.get('tilt', DEFAULT_TILT))
+orient = float(st.session_state.get('orient', DEFAULT_ORIENT))
+provider_pref = st.session_state.get('provider_pref', 'Auto')
+plant_kw = float(st.session_state.get('plant_kw', DEFAULT_PLANT_KW))
+model = load_model()
+
+if model is None:
+    st.warning("⚠️ Modello non addestrato. Vai al tab '🧠 Modello' e addestra prima di usare il monitor.")
+    st.stop()
+
+# Quando l’utente preme “Controlla ora”, salva l’orario e avvia il controllo
+if do_check:
+    st.session_state['last_check'] = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    st.info("🔁 Avvio controllo previsioni aggiornate...")
+
     lat = float(st.session_state.get('lat', DEFAULT_LAT))
     lon = float(st.session_state.get('lon', DEFAULT_LON))
     tilt = float(st.session_state.get('tilt', DEFAULT_TILT))
