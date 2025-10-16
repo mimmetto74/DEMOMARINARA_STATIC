@@ -464,18 +464,20 @@ with tab5:
     email_rcpt = col3.text_input('Email per allerta (opzionale)', value=os.environ.get('ALERT_EMAIL_TO', ''))
 
     # Auto-refresh ogni 15 minuti mentre il tab è aperto
+   # Auto-refresh ogni 15 minuti mentre il tab è aperto
+try:
+    from streamlit_autorefresh import st_autorefresh
+    count = st_autorefresh(interval=15 * 60 * 1000, key='stability_autorefresh')
+    st.caption('⏱️ Aggiornamento automatico attivo: ogni 15 minuti.')
+except ImportError:
+    # Se il modulo non è installato, mostra messaggio e continua
+    st.caption('⏱️ Aggiornamento automatico non disponibile: installa "streamlit-autorefresh" oppure usa "Controlla ora".')
+except Exception as e:
+    # Se altro errore, tenta comunque il rerun solo se disponibile
     try:
-        from streamlit_autorefresh import st_autorefresh
+        st.rerun()
     except Exception:
-        # Fallback built-in: Streamlit >= 1.25
-        st.experimental_rerun  # no-op reference to avoid linter complaints
-    finally:
-        # Usa autorefresh se disponibile, altrimenti offri bottone manuale
-        try:
-            count = st_autorefresh(interval=15 * 60 * 1000, key='stability_autorefresh')
-            st.caption('⏱️ Aggiornamento automatico attivo: ogni 15 minuti.')
-        except Exception:
-            st.caption('⏱️ Aggiornamento automatico non disponibile: usa "Controlla ora".')
+        st.caption('⚠️ Auto-refresh non disponibile: usa "Controlla ora".')
 
     # Stato attuale (dalla sessione / impostazioni esistenti)
     lat = float(st.session_state.get('lat', DEFAULT_LAT))
