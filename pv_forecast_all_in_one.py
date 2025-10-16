@@ -221,28 +221,45 @@ def train_model():
 
 def compute_curve_and_daily(df, model, plant_kw):
     """
-    Calcola la curva di produzione stimata a partire dai dati meteo,
-    mantenendo i dati grezzi e correggendo lo scale della previsione.
+    Calcola la curva di produzione stimata a partire dai dati meteo.
+    Funzionalità:
+      - Conversione automatica del tempo in Europe/Rome
+      - Mantiene i dati grezzi per diagnostica
+      - Allineamento temporale corretto (nessuno shift)
+      - Compatibilità completa con Meteomatics / Open-Meteo
+      - Normalizzazione per potenza impianto
     """
     import numpy as np
     import pandas as pd
+    import pytz
 
+    # --- Validazione iniziale ---
     if df is None or df.empty:
         return df, 0.0, 0.0, 0.0, 0.0
 
-    # --- Prepara le colonne base ---
+    # --- Parsing e ordinamento ---
     df['time'] = pd.to_datetime(df['time'], errors='coerce')
     df = df.dropna(subset=['time']).sort_values('time')
 
-    # --- Conversione robusta delle colonne numeriche ---
+    # ✅ Conversione automatica in ora locale
+    try:
+        tz_local = pytz.timezone("Europe/Rome")
+        # Se il timestamp non ha timezone, assumiamo UTC
+        if df['time'].dt.tz is None:
+            df['time'] = df['time'].dt.tz_localize(pytz.UTC)
+        df['time'] = df['time'].dt.tz_convert(tz_local).dt.tz_localize(None)
+    except Exception as e:
+        st.warning(f"⚠️ Errore conversione fuso orario: {e}")
+
+    # --- Conversione robusta di colonne numeriche ---
     for col in df.columns:
-        if col not in ['time']:
+        if col != 'time':
             try:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             except Exception:
                 pass
 
-    # --- Calcolo irradianza corretta (mantieni dati grezzi) ---
+    # --- Calcolo irradianza corretta (mantiene dati grezzi) ---
     if 'GlobalRad_W' in df.columns:
         df['rad_corr'] = df['GlobalRad_W'].fillna(0)
     elif 'G_M0_Wm2' in df.columns:
@@ -252,16 +269,15 @@ def compute_curve_and_daily(df, model, plant_kw):
         df['rad_corr'] = 0.0
         st.warning("⚠️ Nessuna colonna di irradianza trovata nei dati meteo.")
 
-    # --- Resample ogni 15 minuti ma preservando colonne non numeriche ---
+    # --- Resample ogni 15 minuti (preserva media delle numeriche) ---
     df = df.set_index('time').resample('15T').mean(numeric_only=True).reset_index()
 
-    # --- Predizione modello ---
+    # --- Predizione modello se disponibile ---
     if model is not None:
-        # Recupera le feature originali del modello
         model_features = getattr(model, "feature_names_in_", [])
         X = pd.DataFrame()
 
-        # Mappa nomi delle colonne del dataset
+        # Mappa automatica dei nomi delle feature
         col_map = {
             'G_M0_Wm2': 'GlobalRad_W',
             'GlobalRad_W': 'G_M0_Wm2'
@@ -275,17 +291,26 @@ def compute_curve_and_daily(df, model, plant_kw):
             else:
                 X[feat] = 0.0
 
-        df['kWh_curve'] = model.predict(X)
+        try:
+            df['kWh_curve'] = model.predict(X)
+        except ValueError as e:
+            st.warning(f"⚠️ Mismatch colonne modello: {e}. Riprovo adattando i nomi.")
+            cols = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else X.columns
+            X = X.reindex(columns=cols, fill_value=0)
+            df['kWh_curve'] = model.predict(X)
 
-        # Normalizza rispetto alla potenza dell'impianto
-        df['kWh_curve'] = (
-            df['kWh_curve'] / max(df['kWh_curve'].max(), 1e-6)
-        ) * plant_kw
+        # Normalizza rispetto alla potenza impianto
+        if df['kWh_curve'].max() > 0:
+            df['kWh_curve'] = (
+                df['kWh_curve'] / df['kWh_curve'].max()
+            ) * plant_kw
     else:
-        # fallback proporzionale
-        df['kWh_curve'] = df['rad_corr'] * (plant_kw / 1000.0) / max(df['rad_corr'].max(), 1)
+        # --- Fallback proporzionale all'irradianza ---
+        ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'rad_corr'
+        max_val = max(df[ref_col].max(), 1)
+        df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max_val
 
-    # --- Smussamento centrato (no shift) ---
+    # --- Smussamento centrato (no shift temporale) ---
     df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
 
     # --- Metriche giornaliere ---
