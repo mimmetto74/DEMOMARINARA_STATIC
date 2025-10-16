@@ -140,6 +140,58 @@ def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
     df = df.set_index('time').resample('15min').interpolate().reset_index()
     df['provider'] = 'Open-Meteo'
     return url, df
+    
+# ---------------------- STABILITY UTILS ---------------------- #
+BASELINE_PATH = os.path.join(LOG_DIR, 'baseline_today.json')
+
+def load_baseline():
+    try:
+        if os.path.exists(BASELINE_PATH):
+            with open(BASELINE_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def save_baseline(payload: dict):
+    try:
+        with open(BASELINE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, default=str, indent=2)
+    except Exception as e:
+        st.warning(f'Impossibile salvare baseline: {e}')
+
+def send_alert_email(subject: str, body: str, rcpt: str) -> bool:
+    """Invia email via SMTP se le variabili d'ambiente sono configurate."""
+    host = os.environ.get('SMTP_SERVER')
+    port = int(os.environ.get('SMTP_PORT', '587'))
+    user = os.environ.get('SMTP_USER')
+    pw   = os.environ.get('SMTP_PASS')
+    if not (host and user and pw and rcpt):
+        st.info('SMTP non configurato (SMTP_SERVER/SMTP_PORT/SMTP_USER/SMTP_PASS o destinatario mancanti).')
+        return False
+    try:
+        from email.mime.text import MIMEText
+        import smtplib
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = user
+        msg['To'] = rcpt
+        with smtplib.SMTP(host, port, timeout=20) as s:
+            s.starttls()
+            s.login(user, pw)
+            s.sendmail(user, [rcpt], msg.as_string())
+        return True
+    except Exception as e:
+        st.error(f'Errore invio email: {e}')
+        return False
+
+def compute_energy_for_today(model, lat, lon, tilt, orient, provider_pref, plant_kw):
+    """Ricalcola la previsione per Oggi e ritorna (kWh, df, provider, status, url)."""
+    dfp, energy, peak_kW, peak_pct, cloud_mean, provider, status, url = forecast_for_day(
+        lat=lat, lon=lon, offset_days=0, label='Oggi', model=model,
+        tilt=tilt, orient=orient, provider_pref=provider_pref, plant_kw=plant_kw, autosave=False
+    )
+    return float(energy), dfp, provider, status, url
 
 # ----------------------- MODEL TRAINING ------------------------ #
 from sklearn.ensemble import RandomForestRegressor
@@ -241,7 +293,7 @@ def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
 st.title('☀️ Solar Forecast - ROBOTRONIX for IMEPOWER (SECURE)')
 for k,v in {'lat':DEFAULT_LAT,'lon':DEFAULT_LON,'tilt':DEFAULT_TILT,'orient':DEFAULT_ORIENT,'provider_pref':'Auto','plant_kw':DEFAULT_PLANT_KW}.items():
     st.session_state.setdefault(k,v)
-tab1, tab2, tab3, tab4 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa'])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa','🛡️ Stabilità previsioni'])
 
 # ---- TAB 1: Storico ---- #
 with tab1:
@@ -396,3 +448,127 @@ with tab4:
         layers=[layer],
         tooltip={"text": "Impianto fotovoltaico\nLat: {lat}\nLon: {lon}"}
     ))
+# ---- TAB 5: Stabilità previsioni ---- #
+with tab5:
+    st.subheader('🛡️ Monitoraggio stabilità delle previsioni (ogni 15 minuti)')
+    st.caption('Controlla se i cambiamenti meteo degradano significativamente la produzione attesa; in caso di calo importante: alert, email (opzionale) e nuova simulazione.')
+
+    # Parametri utente
+    col1, col2, col3 = st.columns(3)
+    soglia_pct = col1.slider('Soglia calo energia (%)', min_value=5, max_value=80, value=20, step=1)
+    soglia_kwh = col2.number_input('Soglia calo energia (kWh)', value=50.0, min_value=0.0, step=10.0, format='%.1f')
+    email_rcpt = col3.text_input('Email per allerta (opzionale)', value=os.environ.get('ALERT_EMAIL_TO', ''))
+
+    # Auto-refresh ogni 15 minuti mentre il tab è aperto
+    try:
+        from streamlit_autorefresh import st_autorefresh
+    except Exception:
+        # Fallback built-in: Streamlit >= 1.25
+        st.experimental_rerun  # no-op reference to avoid linter complaints
+    finally:
+        # Usa autorefresh se disponibile, altrimenti offri bottone manuale
+        try:
+            count = st_autorefresh(interval=15 * 60 * 1000, key='stability_autorefresh')
+            st.caption('⏱️ Aggiornamento automatico attivo: ogni 15 minuti.')
+        except Exception:
+            st.caption('⏱️ Aggiornamento automatico non disponibile: usa "Controlla ora".')
+
+    # Stato attuale (dalla sessione / impostazioni esistenti)
+    lat = float(st.session_state.get('lat', DEFAULT_LAT))
+    lon = float(st.session_state.get('lon', DEFAULT_LON))
+    tilt = float(st.session_state.get('tilt', DEFAULT_TILT))
+    orient = float(st.session_state.get('orient', DEFAULT_ORIENT))
+    provider_pref = st.session_state.get('provider_pref', 'Auto')
+    plant_kw = float(st.session_state.get('plant_kw', DEFAULT_PLANT_KW))
+    model = load_model()
+
+    if model is None:
+        st.warning("⚠️ Modello non addestrato. Vai al tab '🧠 Modello' e addestra prima di usare il monitor.")
+        st.stop()
+
+    # Baseline: se manca (nuovo giorno o prima esecuzione), creala ora
+    base = load_baseline()
+    today_str = str(datetime.now(timezone.utc).date())
+    need_new_baseline = (base is None) or (base.get('date') != today_str)
+
+    if need_new_baseline and st.button('Crea baseline di oggi'):
+        energy0, df0, prov0, status0, url0 = compute_energy_for_today(model, lat, lon, tilt, orient, provider_pref, plant_kw)
+        base_payload = {
+            'date': today_str,
+            'created_at_utc': datetime.utcnow().isoformat(),
+            'lat': lat, 'lon': lon, 'tilt': tilt, 'orient': orient,
+            'provider_pref': provider_pref, 'plant_kw': plant_kw,
+            'energy_kWh': energy0
+        }
+        save_baseline(base_payload)
+        st.success(f'Baseline creata ✅  Energia attesa oggi: {energy0:.1f} kWh')
+
+    base = load_baseline()
+
+    # Pulsanti azione
+    cA, cB, cC = st.columns([1,1,2])
+    do_check = cA.button('Controlla ora')
+    do_resim  = cB.button('Rifai simulazione (forzata)')
+
+    # Esegui controllo (manuale o al refresh)
+    if do_check or do_resim or base:
+        energy_now, df_now, prov, status, url = compute_energy_for_today(model, lat, lon, tilt, orient, provider_pref, plant_kw)
+        if df_now is None or df_now.empty:
+            st.error('Nessun dato meteo disponibile al momento per il controllo.')
+        else:
+            # Se non esiste baseline la creiamo "al volo"
+            if base is None:
+                base = {
+                    'date': today_str,
+                    'created_at_utc': datetime.utcnow().isoformat(),
+                    'lat': lat, 'lon': lon, 'tilt': tilt, 'orient': orient,
+                    'provider_pref': provider_pref, 'plant_kw': plant_kw,
+                    'energy_kWh': energy_now
+                }
+                save_baseline(base)
+                st.info('Baseline assente: creata ora con lo stato corrente.')
+
+            energy_base = float(base.get('energy_kWh', 0.0))
+            delta_kWh = energy_now - energy_base
+            delta_pct = (delta_kWh / energy_base * 100.0) if energy_base > 0 else 0.0
+
+            # UI riepilogo
+            st.markdown(f"""
+**Baseline (oggi):** {energy_base:.1f} kWh  
+**Attuale stima (oggi):** {energy_now:.1f} kWh  
+**Δ Energia:** {delta_kWh:+.1f} kWh ({delta_pct:+.1f}%)
+""")
+
+            # Condizione di allarme: calo superiore a soglie impostate
+            alert = (delta_kWh < 0) and ((abs(delta_kWh) >= soglia_kwh) or (abs(delta_pct) >= soglia_pct))
+            if alert:
+                st.error('🚨 Variazione sfavorevole significativa rilevata: possibile drastica riduzione della produzione.')
+                # Notifica (mail opzionale)
+                sent = False
+                if email_rcpt:
+                    subj = 'ALLERTA Stabilità previsioni PV: calo produzione atteso'
+                    body = (
+                        f"Data: {today_str}\n"
+                        f"Baseline: {energy_base:.1f} kWh\n"
+                        f"Nuova stima: {energy_now:.1f} kWh\n"
+                        f"Delta: {delta_kWh:+.1f} kWh ({delta_pct:+.1f}%)\n"
+                        f"Provider: {prov} | Stato: {status}\n"
+                        f"Lat/Lon: {lat:.6f}, {lon:.6f}\n"
+                        f"Raccomandazione: rifare la simulazione con le previsioni mutate."
+                    )
+                    sent = send_alert_email(subj, body, email_rcpt)
+                    if sent:
+                        st.success('✉️ Email di allerta inviata.')
+                # Ricalcolo simulazione (mostra mini-grafico potenza odierna)
+                if df_now is not None and not df_now.empty:
+                    dfp = df_now.copy()
+                    dfp['Potenza_kW'] = dfp['kWh_curve'] * 4
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=dfp['time'], y=dfp['Potenza_kW'], mode='lines', fill='tozeroy',
+                                             name='Nuova potenza prevista (kW)'))
+                    fig.update_layout(template='plotly_white', height=280, xaxis_title='Ora', yaxis_title='kW',
+                                      title='Nuova simulazione (oggi) con previsioni mutate')
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.success('✅ Nessuna variazione critica rilevata rispetto alla baseline.')
+
