@@ -285,20 +285,32 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         )
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
-    # ✅ Normalizzazione oraria per grafici e CSV (UTC → Europe/Rome → naive)
+    # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive)
+    tz_status = "unknown"
     try:
         import pytz
         tz_local = pytz.timezone("Europe/Rome")
         s = pd.to_datetime(df['time'], utc=True, errors='coerce')
+        # Determina se i dati sono già in ora locale
+        first_val = pd.to_datetime(df['time'].iloc[0], errors='coerce')
+        if first_val is not pd.NaT and hasattr(first_val, 'tzinfo') and first_val.tzinfo:
+            tz_status = str(first_val.tzinfo)
+        else:
+            tz_status = "naive/UTC"
+
+        # Converte comunque a Europe/Rome
         s = s.tz_convert(tz_local)
+        # Rimuove tzinfo per evitare che Plotly li sposti
         df['time'] = s.tz_localize(None)
+        tz_status += " → Europe/Rome"
     except Exception as e:
+        tz_status = f"error: {e}"
         st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
 
     # --- Calcolo curve e parametri ---
     df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
 
-    # --- Log ---
+    # --- Log dettagliato con fuso orario rilevato ---
     write_log(
         timestamp=datetime.utcnow().isoformat(),
         day_label=label,
@@ -309,6 +321,7 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         lon=lon,
         tilt=tilt,
         orient=orient,
+        tz_status=tz_status,
         sum_rad_corr=float(df2['rad_corr'].sum()),
         pred_kwh=float(pred_kwh),
         peak_kW=float(peak_kW),
@@ -328,30 +341,6 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
 
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
 
-
-    # --- Calcolo curve e parametri ---
-    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
-
-    # --- Log ---
-    write_log(timestamp=datetime.utcnow().isoformat(), day_label=label, provider=provider, status=status, url=url,
-              lat=lat, lon=lon, tilt=tilt, orient=orient,
-              sum_rad_corr=float(df2['rad_corr'].sum()), pred_kwh=float(pred_kwh),
-              peak_kW=float(peak_kW), cloud_mean=float(cloud_mean))
-
-    # --- Autosave opzionale ---
-    if autosave:
-        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
-        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
-        pd.DataFrame([{
-            'date': str(day),
-            'energy_kWh': float(pred_kwh),
-            'peak_kW': float(peak_kW),
-            'cloud_mean': float(cloud_mean)
-        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
-
-    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
-
-    # ✅ --- NOVITÀ: conversione orario UTC → ora locale italiana ---
     # ✅ Conversione robusta UTC → Europe/Rome
     try:
         from zoneinfo import ZoneInfo
