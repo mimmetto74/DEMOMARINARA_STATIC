@@ -229,46 +229,42 @@ def compute_curve_and_daily(df, model, plant_kw):
     import numpy as np
     import pandas as pd
 
-    # --- Controlli di sicurezza ---
     if df is None or df.empty or 'GlobalRad_W' not in df.columns:
         return df, 0.0, 0.0, 0.0, 0.0
 
-    # --- Calcolo irradianza corretta (semplificata, placeholder se non presente) ---
+    # --- Calcolo irradianza corretta ---
     if 'rad_corr' not in df.columns:
         df['rad_corr'] = df['GlobalRad_W']
 
-    # --- Evita NaN iniziali e fine giornata ---
-    df = df.dropna(subset=['rad_corr']).copy()
-
-    # --- Assicura che 'time' sia datetime e ordinato ---
+    # --- Ordina per tempo e pulisci ---
     df['time'] = pd.to_datetime(df['time'], errors='coerce')
-    df = df.sort_values('time')
+    df = df.sort_values('time').dropna(subset=['time', 'rad_corr']).copy()
 
-    # --- Resample preciso sui 15 minuti, allineato all’inizio intervallo ---
-    df = df.set_index('time').resample('15T', label='left', closed='left').mean().reset_index()
+    # ✅ Considera solo colonne numeriche prima del resample
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    df = df.set_index('time')[num_cols].resample('15T', label='left', closed='left').mean().reset_index()
 
-    # --- Calcolo curva di produzione stimata ---
-    # Se è presente un modello addestrato, usalo
+    # --- Se il modello esiste, usa la previsione ---
     if model is not None:
         features = ['GlobalRad_W', 'CloudCover_P', 'Temp_Air']
         features = [f for f in features if f in df.columns]
         X = df[features].fillna(0)
         df['kWh_curve'] = model.predict(X)
     else:
-        # fallback lineare se il modello manca
+        # fallback proporzionale all'irradianza
         df['kWh_curve'] = df['rad_corr'] * (plant_kw / 1000.0) / df['rad_corr'].max()
 
-    # --- Media mobile centrata per smussare curve senza spostarle ---
+    # --- Smussamento centrato per evitare shift ---
     df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
 
-    # --- Calcolo metriche giornaliere ---
+    # --- Metriche giornaliere ---
     pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)  # ogni passo = 15 min
     peak_kW = df['kWh_curve'].max()
     peak_pct = 100 * peak_kW / plant_kw if plant_kw > 0 else np.nan
     cloud_mean = df['CloudCover_P'].mean() if 'CloudCover_P' in df.columns else np.nan
 
-    # --- Restituisce df completo e statistiche ---
     return df, float(pred_kwh), float(peak_kW), float(peak_pct), float(cloud_mean)
+
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
     """Genera la previsione per un giorno specifico (ieri/oggi/domani...)"""
