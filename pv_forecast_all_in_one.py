@@ -404,7 +404,7 @@ def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
     return fig, mae, mape
 
 # ----------------------------- UI ----------------------------- #
-st.title('☀️ Solar Forecast - ROBOTRONIX for IMEPOWER (SECURE)')
+st.title('☀️ Solar Forecast - ROBOTRONIX for IMEPOWER')
 for k,v in {'lat':DEFAULT_LAT,'lon':DEFAULT_LON,'tilt':DEFAULT_TILT,'orient':DEFAULT_ORIENT,'provider_pref':'Auto','plant_kw':DEFAULT_PLANT_KW}.items():
     st.session_state.setdefault(k,v)
 tab1, tab2, tab3, tab4, tab5 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa','🛡️ Stabilità previsioni'])
@@ -427,7 +427,7 @@ with tab1:
 
 # ---- TAB 2: Modello ---- #
 with tab2:
-    st.subheader('🧠 Modello di previsione – Random Forest (multivariato)')
+    st.subheader('🧠 Modello di previsione')
     c1,c2,c3 = st.columns([1,1,2])
     if c1.button('Addestra / Riaddestra modello', use_container_width=True):
         mae,r2 = train_model(); st.session_state['last_mae']=mae; st.session_state['last_r2']=r2
