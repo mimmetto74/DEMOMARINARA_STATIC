@@ -286,26 +286,32 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
     # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive)
-    tz_status = "unknown"
-    try:
-        import pytz
-        tz_local = pytz.timezone("Europe/Rome")
-        s = pd.to_datetime(df['time'], utc=True, errors='coerce')
-        # Determina se i dati sono già in ora locale
-        first_val = pd.to_datetime(df['time'].iloc[0], errors='coerce')
-        if first_val is not pd.NaT and hasattr(first_val, 'tzinfo') and first_val.tzinfo:
-            tz_status = str(first_val.tzinfo)
-        else:
-            tz_status = "naive/UTC"
+    # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive)
+tz_status = "unknown"
+try:
+    import pytz
+    tz_local = pytz.timezone("Europe/Rome")
 
-        # Converte comunque a Europe/Rome
-        s = s.tz_convert(tz_local)
-        # Rimuove tzinfo per evitare che Plotly li sposti
-        df['time'] = s.tz_localize(None)
-        tz_status += " → Europe/Rome"
-    except Exception as e:
-        tz_status = f"error: {e}"
-        st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
+    # parsing robusto con gestione UTC
+    times = pd.to_datetime(df['time'], errors='coerce')
+
+    # se il risultato non ha info di fuso, assumiamo UTC
+    if times.dt.tz is None:
+        times = times.dt.tz_localize(pytz.UTC)
+
+    # converte in ora italiana
+    times = times.dt.tz_convert(tz_local)
+
+    # rimuove info di fuso per evitare shift nei grafici
+    df['time'] = times.dt.tz_localize(None)
+
+    # salva info fuso per log
+    tz_status = "UTC→Europe/Rome (naive per grafico)"
+
+except Exception as e:
+    tz_status = f"error: {e}"
+    st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
+
 
     # --- Calcolo curve e parametri ---
     df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
