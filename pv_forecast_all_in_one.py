@@ -285,22 +285,15 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         )
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
-    # ✅ Conversione intelligente UTC → Europe/Rome
+    # ✅ Normalizzazione oraria per grafici e CSV (UTC → Europe/Rome → naive)
     try:
-        from zoneinfo import ZoneInfo
-        df['time'] = pd.to_datetime(df['time'], errors='coerce')
-
-        # Se i dati sono tz-naive, assumili in UTC
-        if df['time'].dt.tz is None:
-            df['time'] = df['time'].dt.tz_localize('UTC')
-
-        # Controlla se sono già in Europe/Rome (Meteomatics spesso li restituisce così)
-        tz_sample = df['time'].dt.tz
-        if tz_sample is not None and str(tz_sample) not in ['Europe/Rome', 'CET', 'CEST']:
-            df['time'] = df['time'].dt.tz_convert('Europe/Rome')
-
+        import pytz
+        tz_local = pytz.timezone("Europe/Rome")
+        s = pd.to_datetime(df['time'], utc=True, errors='coerce')
+        s = s.tz_convert(tz_local)
+        df['time'] = s.tz_localize(None)
     except Exception as e:
-        st.warning(f"⚠️ Conversione timezone saltata: {e}")
+        st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
 
     # --- Calcolo curve e parametri ---
     df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
@@ -334,6 +327,7 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
 
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
 
     # --- Calcolo curve e parametri ---
     df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
