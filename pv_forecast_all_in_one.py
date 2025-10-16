@@ -271,9 +271,70 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
 
     # --- Se nessun dato disponibile ---
     if df is None or df.empty:
-        write_log(timestamp=datetime.utcnow().isoformat(), day_label=label, provider=provider, status=status, url=url,
-                  lat=lat, lon=lon, tilt=tilt, orient=orient, note='no data')
+        write_log(
+            timestamp=datetime.utcnow().isoformat(),
+            day_label=label,
+            provider=provider,
+            status=status,
+            url=url,
+            lat=lat,
+            lon=lon,
+            tilt=tilt,
+            orient=orient,
+            note='no data'
+        )
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
+
+    # ✅ Conversione intelligente UTC → Europe/Rome
+    try:
+        from zoneinfo import ZoneInfo
+        df['time'] = pd.to_datetime(df['time'], errors='coerce')
+
+        # Se i dati sono tz-naive, assumili in UTC
+        if df['time'].dt.tz is None:
+            df['time'] = df['time'].dt.tz_localize('UTC')
+
+        # Controlla se sono già in Europe/Rome (Meteomatics spesso li restituisce così)
+        tz_sample = df['time'].dt.tz
+        if tz_sample is not None and str(tz_sample) not in ['Europe/Rome', 'CET', 'CEST']:
+            df['time'] = df['time'].dt.tz_convert('Europe/Rome')
+
+    except Exception as e:
+        st.warning(f"⚠️ Conversione timezone saltata: {e}")
+
+    # --- Calcolo curve e parametri ---
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+
+    # --- Log ---
+    write_log(
+        timestamp=datetime.utcnow().isoformat(),
+        day_label=label,
+        provider=provider,
+        status=status,
+        url=url,
+        lat=lat,
+        lon=lon,
+        tilt=tilt,
+        orient=orient,
+        sum_rad_corr=float(df2['rad_corr'].sum()),
+        pred_kwh=float(pred_kwh),
+        peak_kW=float(peak_kW),
+        cloud_mean=float(cloud_mean)
+    )
+
+    # --- Autosave opzionale ---
+    if autosave:
+        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
+        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
+        pd.DataFrame([{
+            'date': str(day),
+            'energy_kWh': float(pred_kwh),
+            'peak_kW': float(peak_kW),
+            'cloud_mean': float(cloud_mean)
+        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
 
     # ✅ Conversione robusta e intelligente UTC → Europe/Rome
     try:
