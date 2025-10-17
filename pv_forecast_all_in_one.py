@@ -569,7 +569,7 @@ with tab3:
                 )
                 results[label] = dfp
             st.markdown(f"### **{label}**")
-                st.caption(f"Provider: {provider} | Stato: {status}")
+            st.caption(f"Provider: {provider} | Stato: {status}")
                 #st.code(url or '', language='text')
 
                 if dfp is not None and not dfp.empty:
