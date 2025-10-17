@@ -430,7 +430,40 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
 
 
-    
+    # ✅ Conversione robusta UTC → Europe/Rome
+    try:
+        from zoneinfo import ZoneInfo
+        df['time'] = pd.to_datetime(df['time'])
+        if df['time'].dt.tz is None:
+        # Se non ha timezone, aggiungiamo UTC
+           df['time'] = df['time'].dt.tz_localize('UTC')
+    # In entrambi i casi, convertiamo in ora italiana
+        df['time'] = df['time'].dt.tz_convert('Europe/Rome')
+    except Exception as e:
+        st.warning(f"⚠️ Impossibile convertire timezone: {e}")
+
+
+    # --- Calcolo curve e parametri ---
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+
+    # --- Log ---
+    write_log(timestamp=datetime.utcnow().isoformat(), day_label=label, provider=provider, status=status, url=url,
+              lat=lat, lon=lon, tilt=tilt, orient=orient,
+              sum_rad_corr=float(df2['rad_corr'].sum()), pred_kwh=float(pred_kwh),
+              peak_kW=float(peak_kW), cloud_mean=float(cloud_mean))
+
+    # --- Autosave opzionale ---
+    if autosave:
+        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
+        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
+        pd.DataFrame([{
+            'date': str(day),
+            'energy_kWh': float(pred_kwh),
+            'peak_kW': float(peak_kW),
+            'cloud_mean': float(cloud_mean)
+        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
 
 
 # --------------- COMPARISON: FORECAST VS REAL ----------------- #
@@ -678,7 +711,7 @@ with tab3:
                             )
 
                             # 🟢 Etichetta LIVE in alto a destra
-                                st.markdown(
+                            st.markdown(
                                 f"""
                                 <div style='text-align:right; margin-top:-20px;'>
                                      <span style='
@@ -738,7 +771,7 @@ with tab4:
     lon = float(st.session_state.get('lon', DEFAULT_LON))
 
     # Mostra coordinate testuali
-        st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
+    st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
 
     # Import Folium e Streamlit-Folium
     from streamlit_folium import st_folium
@@ -763,6 +796,7 @@ with tab4:
     # Mostra la mappa nella pagina Streamlit
     st_folium(m, width=900, height=500)
 
+# ---- TAB 5: Stabilità previsioni ---- #
 # ---- TAB 5: Stabilità previsioni ---- #
 with tab5:
     from datetime import datetime
@@ -820,7 +854,7 @@ with tab5:
         st.session_state['last_check'] = now_local
 
     # --- Controllo manuale ---
-        st.markdown("### 🔄 Controllo manuale")
+    st.markdown("### 🔄 Controllo manuale")
     st.caption("Premi per eseguire subito il controllo di stabilità previsioni.")
     do_check = st.button('🔍 Controlla ora')
 
@@ -829,7 +863,7 @@ with tab5:
             run_stability_check(manual=True)
 
     # --- Controllo automatico ogni 15 minuti ---
-        st.markdown("### ⚙️ Controllo automatico")
+    st.markdown("### ⚙️ Controllo automatico")
     st.caption("Il controllo viene eseguito ogni 15 minuti automaticamente in background.")
     auto_check = st.checkbox("🕒 Attiva controllo automatico ogni 15 minuti", value=True)
 
