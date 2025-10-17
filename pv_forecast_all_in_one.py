@@ -430,6 +430,42 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
 
 
+    # ✅ Conversione robusta UTC → Europe/Rome
+    try:
+        from zoneinfo import ZoneInfo
+        df['time'] = pd.to_datetime(df['time'])
+        if df['time'].dt.tz is None:
+        # Se non ha timezone, aggiungiamo UTC
+           df['time'] = df['time'].dt.tz_localize('UTC')
+    # In entrambi i casi, convertiamo in ora italiana
+        df['time'] = df['time'].dt.tz_convert('Europe/Rome')
+    except Exception as e:
+        st.warning(f"⚠️ Impossibile convertire timezone: {e}")
+
+
+    # --- Calcolo curve e parametri ---
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+
+    # --- Log ---
+    write_log(timestamp=datetime.utcnow().isoformat(), day_label=label, provider=provider, status=status, url=url,
+              lat=lat, lon=lon, tilt=tilt, orient=orient,
+              sum_rad_corr=float(df2['rad_corr'].sum()), pred_kwh=float(pred_kwh),
+              peak_kW=float(peak_kW), cloud_mean=float(cloud_mean))
+
+    # --- Autosave opzionale ---
+    if autosave:
+        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
+        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
+        pd.DataFrame([{
+            'date': str(day),
+            'energy_kWh': float(pred_kwh),
+            'peak_kW': float(peak_kW),
+            'cloud_mean': float(cloud_mean)
+        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
+
 # --------------- COMPARISON: FORECAST VS REAL ----------------- #
 from sklearn.metrics import mean_absolute_error
 def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
@@ -630,144 +666,25 @@ with tab3:
                     except Exception as e:
                         st.warning(f"⚠️ Errore nel calcolo dei picchi: {e}")
 
-
-                    # --- 🕒 Linea verticale dell'ora attuale con auto-refresh e badge LIVE ---
-
+                    # --- 🕒 Linea verticale dell'ora attuale ---
                     try:
-
-                        from datetime import datetime, timedelta
-
-                        import pytz
-
-                        import pandas as pd
-
-                        import streamlit as st
-
-                    
-
-                        # 🔄 Auto-refresh ogni 60 secondi
-
-                        try:
-
-                            from streamlit_autorefresh import st_autorefresh
-
-                            st_autorefresh(interval=60000, key="clock_refresh")
-
-                        except Exception:
-
-                            pass  # se non installato, ignora
-
-                    
-
-                        # ⏰ Calcola ora locale
-
                         tz_local = pytz.timezone("Europe/Rome")
-
                         now_local = datetime.now(tz_local)
-
                         now_local_naive = now_local.replace(tzinfo=None)
 
-                    
-
-                        # 🧭 Converte colonna 'time' in datetime naive
-
-                        dfp["time"] = pd.to_datetime(dfp["time"], errors="coerce")
-
-                        dfp = dfp.dropna(subset=["time"])
-
-                    
-
-                        if not dfp.empty:
-
-                            t_min = dfp["time"].min()
-
-                            t_max = dfp["time"].max()
-
-                            tolerance = timedelta(hours=1)
-
-                    
-
-                            if (t_min - tolerance) <= now_local_naive <= (t_max + tolerance):
-
-                                sec = int(now_local.second)
-
-                                color = "red" if sec % 2 == 0 else "orange"
-
-                    
-
-                                fig.add_vline(
-
-                                    x=now_local_naive,
-
-                                    line_width=2,
-
-                                    line_dash="dot",
-
-                                    line_color=color,
-
-                                    annotation_text=f"🕒 Ora attuale {{now_local.strftime('%H:%M:%S')}}",
-
-                                    annotation_position="top right",
-
-                                    annotation_font_size=12,
-
-                                    annotation_font_color=color
-
-                                )
-
-                    
-
-                                # 🟢 Etichetta LIVE in alto a destra
-
-                                st.markdown(
-
-                                    f\"\"\"
-
-                                    <div style='text-align:right; margin-top:-20px;'>
-
-                                        <span style='
-
-                                            background-color:{{{{color}}}};
-
-                                            color:white;
-
-                                            padding:4px 10px;
-
-                                            border-radius:8px;
-
-                                            font-weight:bold;
-
-                                            font-size:14px;
-
-                                            animation: blink 1s infinite;
-
-                                        '>🟢 LIVE – aggiornamento in corso</span>
-
-                                    </div>
-
-                                    <style>
-
-                                        @keyframes blink {{
-
-                                            0% {{ opacity: 1; }}
-
-                                            50% {{ opacity: 0.5; }}
-
-                                            100% {{ opacity: 1; }}
-
-                                        }}
-
-                                    </style>
-
-                                    \"\"\",
-
-                                    unsafe_allow_html=True
-
-                                )
-
+                        if dfp['time'].min() <= now_local_naive <= dfp['time'].max():
+                            fig.add_vline(
+                                x=now_local_naive,
+                                line_width=2,
+                                line_dash="dot",
+                                line_color="red",
+                                annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                                annotation_position="top right",
+                                annotation_font_size=12,
+                                annotation_font_color="red"
+                            )
                     except Exception as e:
-
-                        st.warning("⚠️ Errore nella linea dell'ora attuale (animata): {}".format(e))
+                        st.warning(f"⚠️ Errore nella linea dell'ora attuale: {e}")
 
                     # --- Layout grafico ---
                     fig.update_layout(
