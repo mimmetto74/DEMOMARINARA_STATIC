@@ -569,7 +569,7 @@ with tab3:
                         today_local = now_local.strftime("%d/%m/%Y")
                         hour_local = now_local.strftime("%H:%M:%S")
 
-                            st.markdown("### 🕒 Fuso orario e ora locale")
+                        st.markdown("### 🕒 Fuso orario e ora locale")
                         st.info(
                             f"**Fuso orario attivo:** Europe/Rome 🇮🇹  \n"
                             f"**Data locale:** {today_local}  \n"
