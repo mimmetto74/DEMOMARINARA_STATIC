@@ -673,23 +673,23 @@ with tab3:
 
                
                 # --- Linea ora attuale (final fix) ---
-            try:
-                now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
-                if dfp['time'].min() <= now_local <= dfp['time'].max():
-                    # Converte il datetime in oggetto timestamp (numerico) per Plotly
-                    from datetime import datetime as dt
-                    now_timestamp = pd.Timestamp(now_local).to_pydatetime()
+                try:
+                    now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
+                    if dfp['time'].min() <= now_local <= dfp['time'].max():
+                        # Converte il datetime in oggetto timestamp (numerico) per Plotly
+                        from datetime import datetime as dt
+                        now_timestamp = pd.Timestamp(now_local).to_pydatetime()
 
-                    fig.add_vline(
-                        x=now_timestamp,
-                        line_width=2,
-                        line_dash='dot',
-                        line_color='red',
-                        annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                        annotation_position="top right"
+                        fig.add_vline(
+                            x=now_timestamp,
+                            line_width=2,
+                            line_dash='dot',
+                            line_color='red',
+                            annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                            annotation_position="top right"
                     )
-            except Exception as e:
-               st.warning(f"Errore linea oraria (final fix): {e}")
+                except Exception as e:
+                   st.warning(f"Errore linea oraria (final fix): {e}")
 
                 # --- Layout grafico ---
                 fig.update_layout(
