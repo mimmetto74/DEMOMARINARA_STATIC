@@ -572,7 +572,7 @@ with tab3:
             st.caption(f"Provider: {provider} | Stato: {status}")
                 #st.code(url or '', language='text')
 
-                if dfp is not None and not dfp.empty:
+            if dfp is not None and not dfp.empty:
                     # --- ANTEPRIMA DATI GREZZI DEL PROVIDER ---
                     with st.expander("📊 Meteomatics/Open-Meteo: anteprima dati grezzi"):
                         try:
