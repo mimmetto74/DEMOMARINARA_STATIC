@@ -542,13 +542,35 @@ with tab2:
 
     # --- Pulsante unico di addestramento ---
     if st.button('🚀 Addestra / Riaddestra modello', key='train_model_btn', use_container_width=True):
-        # se è stato caricato un dataset personalizzato, aggiorna il percorso temporaneamente
-        global DATA_PATH
-        old_data_path = DATA_PATH
-        DATA_PATH = custom_dataset_path
-        mae, r2 = train_model()
-        DATA_PATH = old_data_path  # ripristina
-        st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
+    # Scegli quale dataset usare
+    data_path_to_use = custom_dataset_path if uploaded_files else DATA_PATH
+
+    # Carica i dati da quel percorso
+    df0 = pd.read_csv(data_path_to_use, parse_dates=['Date'])
+    if 'E_INT_Daily_KWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
+        df0 = df0.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
+    for col in ['CloudCover_P','Temp_Air']:
+        if col not in df0.columns:
+            df0[col] = np.nan
+    df = df0.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2']).copy()
+
+    X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
+    y = df['E_INT_Daily_kWh']
+
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import mean_absolute_error, r2_score
+
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
+    model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
+    model.fit(Xtr, ytr)
+    pred = model.predict(Xte)
+    mae = float(mean_absolute_error(yte, pred))
+    r2 = float(r2_score(yte, pred))
+    joblib.dump({'model': model, 'features': X.columns.tolist()}, MODEL_PATH)
+
+    st.success(f'✅ Modello addestrato con dataset {"unificato" if uploaded_files else "principale"}! MAE: {mae:.2f} | R²: {r2:.3f}')
+
 
 
 # ---- TAB 3: Previsioni (4 giorni) ---- #
