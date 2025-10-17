@@ -543,7 +543,7 @@ with tab2:
         st.session_state['custom_data_loaded'] = True
 
     c1, c2, c3 = st.columns([1,1,2])
-    if c1.button('Addestra / Riaddestra modello', use_container_width=True):
+    if c1.button('Addestra / Riaddestra modello', key='train_model_btn', use_container_width=True):
         # Se è stato caricato un dataset unificato, usalo
         if st.session_state.get('custom_data_loaded', False):
             DATA_PATH = st.session_state['merged_path']
@@ -551,7 +551,7 @@ with tab2:
         st.session_state['last_mae'] = mae
         st.session_state['last_r2'] = r2
         st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
-    if c1.button('Addestra / Riaddestra modello', use_container_width=True):
+    if c1.button('Addestra / Riaddestra modello', key='train_model_btn_merged', use_container_width=True):
         mae,r2 = train_model(); st.session_state['last_mae']=mae; st.session_state['last_r2']=r2
         st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
     if os.path.exists(MODEL_PATH):
