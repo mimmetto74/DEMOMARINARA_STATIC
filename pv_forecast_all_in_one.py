@@ -589,8 +589,9 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
 # ---- TAB 3: Previsioni (4 giorni) ---- #
+# ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
-    st.subheader('🔮 Previsioni (PT15M, tilt/orient, provider toggle)')
+    st.subheader('🔮 Previsioni 4 giorni (15 min)')
 
     colA, colB, colC, colD = st.columns(4)
     st.session_state['lat'] = colA.number_input('Lat', value=float(st.session_state['lat']), step=0.0001, format='%.6f')
@@ -606,158 +607,106 @@ with tab3:
     if model is None:
         st.warning('⚠️ Modello non addestrato. Vai al tab "🧠 Modello".')
     else:
-        if st.button('Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)'):
+        if st.button('Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)', use_container_width=True):
             results = {}
             for label, off in [('Ieri', -1), ('Oggi', 0), ('Domani', 1), ('Dopodomani', 2)]:
-                dfp, energy, peak_kW, peak_pct, cloud_mean, provider, status, url = forecast_for_day(
-                    lat=st.session_state['lat'], lon=st.session_state['lon'],
-                    offset_days=off, label=label, model=model,
-                    tilt=st.session_state['tilt'], orient=st.session_state['orient'],
-                    provider_pref=st.session_state['provider_pref'], plant_kw=st.session_state['plant_kw'],
-                    autosave=False
-                )
-                results[label] = dfp
+                try:
+                    dfp, energy, peak_kW, peak_pct, cloud_mean, provider, status, url = forecast_for_day(
+                        lat=st.session_state['lat'], lon=st.session_state['lon'],
+                        offset_days=off, label=label, model=model,
+                        tilt=st.session_state['tilt'], orient=st.session_state['orient'],
+                        provider_pref=st.session_state['provider_pref'], plant_kw=st.session_state['plant_kw'],
+                        autosave=False
+                    )
+                except Exception as e:
+                    st.error(f"Errore durante la previsione per {label}: {e}")
+                    continue
+
                 st.markdown(f"### **{label}**")
                 st.caption(f"Provider: {provider} | Stato: {status}")
-                #st.code(url or '', language='text')
 
-                if dfp is not None and not dfp.empty:
-                    # --- ANTEPRIMA DATI GREZZI DEL PROVIDER ---
-                    with st.expander("📊 Meteomatics/Open-Meteo: anteprima dati grezzi"):
-                        try:
-                            fig_diag = go.Figure()
-                            fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['GlobalRad_W'], name='GlobalRad_W', mode='lines'))
-                            if 'CloudCover_P' in dfp.columns:
-                                fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['CloudCover_P'], name='CloudCover_P', mode='lines'))
-                            if 'Temp_Air' in dfp.columns:
-                                fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['Temp_Air'], name='Temp_Air', mode='lines'))
-                            fig_diag.update_layout(template='plotly_white', height=220, margin=dict(l=10, r=10, t=30, b=10))
-                            st.plotly_chart(fig_diag, use_container_width=True)
-                        except Exception as e:
-                            st.warning(f"Diagnostica non disponibile: {e}")
+                if dfp is None or dfp.empty:
+                    st.warning(f"Nessun dato disponibile per {label}.")
+                    continue
 
-                    # =====================================================================
-                    #  SEZIONE: Grafico previsioni + ora locale + debug allineamento
-                    # =====================================================================
+                # --- Uniforma timezone e ordina ---
+                import pytz
+                dfp['time'] = pd.to_datetime(dfp['time'], errors='coerce')
+                dfp = dfp.dropna(subset=['time']).sort_values('time')
+                if dfp['time'].dt.tz is None:
+                    dfp['time'] = dfp['time'].dt.tz_localize(pytz.UTC)
+                dfp['time'] = dfp['time'].dt.tz_convert("Europe/Rome").dt.tz_localize(None)
 
-                    import plotly.graph_objects as go
-                    import pytz
-                    from datetime import datetime
+                # --- Salva in sessione ---
+                st.session_state[f'forecast_{label.lower()}'] = dfp
 
-                    # 🕒 Mostra fuso orario e ora corrente
-                    try:
-                        tz_local = pytz.timezone("Europe/Rome")
-                        now_local = datetime.now(tz_local)
-                        today_local = now_local.strftime("%d/%m/%Y")
-                        hour_local = now_local.strftime("%H:%M:%S")
+                # --- Grafico produzione e irradianza ---
+                import plotly.graph_objects as go
+                fig = go.Figure()
+                if 'GlobalRad_W' in dfp.columns:
+                    fig.add_trace(go.Scatter(
+                        x=dfp['time'], y=dfp['GlobalRad_W'],
+                        mode='lines', name='☀️ Irradianza (W/m²)',
+                        line=dict(color='royalblue', width=2)
+                    ))
+                if 'kWh_curve' in dfp.columns:
+                    fig.add_trace(go.Scatter(
+                        x=dfp['time'], y=dfp['kWh_curve'],
+                        mode='lines', name='⚡ Produzione stimata (kW)',
+                        line=dict(color='orange', width=3)
+                    ))
 
-                        st.markdown("### 🕒 Fuso orario e ora locale")
-                        st.info(
-                            f"**Fuso orario attivo:** Europe/Rome 🇮🇹  \n"
-                            f"**Data locale:** {today_local}  \n"
-                            f"**Ora locale corrente:** {hour_local}"
+                # --- Picchi irradiance / produzione ---
+                try:
+                    idx_rad = dfp['GlobalRad_W'].idxmax() if 'GlobalRad_W' in dfp.columns else None
+                    idx_prod = dfp['kWh_curve'].idxmax() if 'kWh_curve' in dfp.columns else None
+                    if idx_rad is not None and idx_prod is not None:
+                        t_rad = dfp.loc[idx_rad, 'time']
+                        t_prod = dfp.loc[idx_prod, 'time']
+                        delta_min = abs((t_rad - t_prod).total_seconds()) / 60
+                        if delta_min > 30:
+                            st.warning(f"⚠️ Differenza picchi: {int(delta_min)} minuti (☀️ {t_rad.strftime('%H:%M')} vs ⚡ {t_prod.strftime('%H:%M')})")
+                        else:
+                            st.success(f"✅ Picchi allineati ({t_prod.strftime('%H:%M')})")
+                except Exception as e:
+                    st.warning(f"Errore calcolo picchi: {e}")
+
+                # --- Linea ora attuale ---
+                try:
+                    now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
+                    if dfp['time'].min() <= now_local <= dfp['time'].max():
+                        fig.add_vline(
+                            x=now_local,
+                            line_width=2, line_dash='dot', line_color='red',
+                            annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                            annotation_position="top right"
                         )
-                    except Exception as e:
-                        st.warning(f"⚠️ Impossibile determinare l'ora locale: {e}")
+                except Exception as e:
+                    st.warning(f"Errore linea oraria: {e}")
 
-                    # --- CREA FIGURA ---
-                    fig = go.Figure()
+                # --- Layout grafico ---
+                fig.update_layout(
+                    title=f"📊 Andamento previsto — {label}",
+                    xaxis_title="Ora locale (Europe/Rome)",
+                    yaxis_title="Potenza / Irradianza",
+                    template="plotly_white",
+                    height=400,
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
-                    # ☀️ Curva irradianza
-                    if 'GlobalRad_W' in dfp.columns:
-                        fig.add_trace(go.Scatter(
-                            x=dfp['time'], y=dfp['GlobalRad_W'],
-                            mode='lines', name='☀️ Irradianza (W/m²)',
-                            line=dict(color='royalblue', width=2)
-                        ))
+                # --- Download CSV ---
+                csv_data = dfp.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label=f"📥 Scarica CSV previsione {label}",
+                    data=csv_data,
+                    file_name=f"previsione_{label.lower()}.csv",
+                    mime="text/csv",
+                    key=f"download_{label.lower()}",
+                    use_container_width=True
+                )
 
-                    # ⚡ Curva produzione stimata
-                    if 'kWh_curve' in dfp.columns:
-                        fig.add_trace(go.Scatter(
-                            x=dfp['time'], y=dfp['kWh_curve'],
-                            mode='lines', name='⚡ Produzione stimata (kW)',
-                            line=dict(color='orange', width=3)
-                        ))
-
-                    # --- Trova picchi e disegna linee ---
-                    try:
-                        idx_rad = dfp['GlobalRad_W'].idxmax() if 'GlobalRad_W' in dfp.columns else None
-                        idx_prod = dfp['kWh_curve'].idxmax() if 'kWh_curve' in dfp.columns else None
-
-                        t_rad, t_prod = None, None
-                        if idx_rad is not None:
-                            t_rad = dfp.loc[idx_rad, 'time']
-                            fig.add_vline(x=t_rad, line_width=2, line_dash='dash', line_color='royalblue')
-                            fig.add_annotation(
-                                x=t_rad, y=max(dfp['GlobalRad_W']),
-                                text=f"☀️ Picco irradianza {t_rad.strftime('%H:%M')}",
-                                showarrow=True, arrowhead=2, yshift=25, bgcolor='rgba(0,0,50,0.3)'
-                            )
-
-                        if idx_prod is not None:
-                            t_prod = dfp.loc[idx_prod, 'time']
-                            fig.add_vline(x=t_prod, line_width=2, line_dash='dot', line_color='orange')
-                            fig.add_annotation(
-                                x=t_prod, y=max(dfp['kWh_curve']),
-                                text=f"⚡ Picco produzione {t_prod.strftime('%H:%M')}",
-                                showarrow=True, arrowhead=2, yshift=25, bgcolor='rgba(50,0,0,0.3)'
-                            )
-
-                        if t_rad and t_prod:
-                            delta = abs((t_rad - t_prod).total_seconds()) / 60
-                            if delta <= 15:
-                                st.success(f"✅ Allineamento perfetto: picchi coincidenti ({t_rad.strftime('%H:%M')}).")
-                            else:
-                                st.warning(
-                                    f"⚠️ Differenza picchi: {delta:.0f} minuti "
-                                    f"(irradianza {t_rad.strftime('%H:%M')} vs produzione {t_prod.strftime('%H:%M')})."
-                                )
-                    except Exception as e:
-                        st.warning(f"⚠️ Errore nel calcolo dei picchi: {e}")
-
-                    # --- 🕒 Linea verticale dell'ora attuale ---
-                    try:
-                        tz_local = pytz.timezone("Europe/Rome")
-                        now_local = datetime.now(tz_local)
-                        now_local_naive = now_local.replace(tzinfo=None)
-
-                        if dfp['time'].min() <= now_local_naive <= dfp['time'].max():
-                            fig.add_vline(
-                                x=now_local_naive,
-                                line_width=2,
-                                line_dash="dot",
-                                line_color="red",
-                                annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                                annotation_position="top right",
-                                annotation_font_size=12,
-                                annotation_font_color="red"
-                            )
-                    except Exception as e:
-                        st.warning(f"⚠️ Errore nella linea dell'ora attuale: {e}")
-
-                    # --- Layout grafico ---
-                    fig.update_layout(
-                        title="☀️ Irradianza vs ⚡ Produzione stimata",
-                        xaxis_title="Ora locale (Europe/Rome)",
-                        yaxis_title="Potenza [W / kW]",
-                        template="plotly_white",
-                        hovermode="x unified",
-                        legend=dict(orientation="h", y=-0.25),
-                        margin=dict(t=80, b=40)
-                    )
-
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    # --- 🔧 SEZIONE DEBUG ---
-                    with st.expander("🔧 Debug: verifica allineamento orario (prime 20 righe)"):
-                        try:
-                            st.caption("Controlla i primi campioni per verificare tempi e valori:")
-                            st.dataframe(
-                                dfp[['time', 'GlobalRad_W', 'rad_corr', 'kWh_curve']].head(20),
-                                use_container_width=True
-                            )
-                        except Exception as e:
-                            st.warning(f"⚠️ Debug non disponibile: {e}")
+                st.divider()
 
 # ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
 with tab4:
