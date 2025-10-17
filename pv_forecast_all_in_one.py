@@ -672,18 +672,21 @@ with tab3:
                     st.warning(f"Errore calcolo picchi: {e}")
 
                 # --- Linea ora attuale ---
+                # --- Linea ora attuale (corretto) ---
                 try:
                     now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
                     if dfp['time'].min() <= now_local <= dfp['time'].max():
+                        # Convertiamo esplicitamente il datetime in stringa ISO per Plotly
                         fig.add_vline(
-                            x=now_local,
-                            line_width=2, line_dash='dot', line_color='red',
+                            x=now_local.isoformat(),
+                            line_width=2,
+                            line_dash='dot',
+                            line_color='red',
                             annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
                             annotation_position="top right"
                         )
                 except Exception as e:
-                    st.warning(f"Errore linea oraria: {e}")
-
+                    st.warning(f"Errore linea oraria (fix): {e}")
                 # --- Layout grafico ---
                 fig.update_layout(
                     title=f"📊 Andamento previsto — {label}",
