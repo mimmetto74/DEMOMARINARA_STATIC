@@ -666,25 +666,53 @@ with tab3:
                     except Exception as e:
                         st.warning(f"⚠️ Errore nel calcolo dei picchi: {e}")
 
-                    # --- 🕒 Linea verticale dell'ora attuale ---
+                    # --- 🕒 Linea verticale dell'ora attuale con auto-refresh e animazione ---
                     try:
+                        from datetime import datetime, timedelta
+                        import pytz
+                        import pandas as pd
+                        import streamlit as st
+                    
+                        # 🔄 Auto-refresh ogni 60 secondi
+                        try:
+                            from streamlit_autorefresh import st_autorefresh
+                            st_autorefresh(interval=60000, key="clock_refresh")  # refresh grafico ogni 60 s
+                        except Exception:
+                            pass  # se non installato, ignora
+                    
+                        # ⏰ Ora locale italiana
                         tz_local = pytz.timezone("Europe/Rome")
                         now_local = datetime.now(tz_local)
                         now_local_naive = now_local.replace(tzinfo=None)
-
-                        if dfp['time'].min() <= now_local_naive <= dfp['time'].max():
-                            fig.add_vline(
-                                x=now_local_naive,
-                                line_width=2,
-                                line_dash="dot",
-                                line_color="red",
-                                annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                                annotation_position="top right",
-                                annotation_font_size=12,
-                                annotation_font_color="red"
-                            )
+                    
+                        # 🧭 Converte colonna 'time' in datetime naive
+                        dfp["time"] = pd.to_datetime(dfp["time"], errors="coerce")
+                        dfp = dfp.dropna(subset=["time"])
+                    
+                        if not dfp.empty:
+                            t_min = dfp["time"].min()
+                            t_max = dfp["time"].max()
+                            tolerance = timedelta(hours=1)
+                    
+                            if (t_min - tolerance) <= now_local_naive <= (t_max + tolerance):
+                                # 🔆 Effetto lampeggio: cambia colore ciclicamente in base al secondo
+                                sec = int(now_local.second)
+                                color = "red" if sec % 2 == 0 else "orange"
+                    
+                                fig.add_vline(
+                                    x=now_local_naive,
+                                    line_width=2,
+                                    line_dash="dot",
+                                    line_color=color,
+                                    annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M:%S')}",
+                                    annotation_position="top right",
+                                    annotation_font_size=12,
+                                    annotation_font_color=color
+                                )
+                    
                     except Exception as e:
-                        st.warning(f"⚠️ Errore nella linea dell'ora attuale: {e}")
+                        st.warning(f"⚠️ Errore nella linea dell'ora attuale (autorefresh animato): {e}")
+
 
                     # --- Layout grafico ---
                     fig.update_layout(
