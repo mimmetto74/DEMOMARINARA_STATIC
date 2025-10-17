@@ -535,7 +535,7 @@ with tab3:
                     autosave=False
                 )
                 results[label] = dfp
-                    st.markdown(f"### **{label}**")
+                st.markdown(f"### **{label}**")
                 st.caption(f"Provider: {provider} | Stato: {status}")
                 #st.code(url or '', language='text')
 
