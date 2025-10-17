@@ -514,8 +514,7 @@ with tab1:
 with tab2:
     st.subheader('🧠 Modello di previsione')
     c1,c2,c3 = st.columns([1,1,2])
-    
-    # --- Carica CSV aggiuntivi per ampliare il training ---
+        # --- Carica CSV aggiuntivi per ampliare il training ---
     st.markdown("📂 **Carica altri file CSV di dati storici per ampliare il training del modello:**")
     uploaded_files = st.file_uploader(
         "Trascina qui uno o più file CSV di dati storici aggiuntivi",
@@ -542,8 +541,9 @@ with tab2:
 
 if c1.button('Addestra / Riaddestra modello', use_container_width=True):
         data_path = st.session_state.get('custom_dataset', DATA_PATH)
-        df = pd.read_csv(data_path, parse_dates=['Date'])
-        df.to_csv(DATA_PATH, index=False)
+        if os.path.exists(data_path):
+            df = pd.read_csv(data_path, parse_dates=['Date'])
+            df.to_csv(DATA_PATH, index=False)
         mae,r2 = train_model(); st.session_state['last_mae']=mae; st.session_state['last_r2']=r2
         st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
     if os.path.exists(MODEL_PATH):
