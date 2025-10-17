@@ -521,6 +521,8 @@ with tab2:
         type=['csv'], accept_multiple_files=True
     )
 
+    custom_dataset_path = DATA_PATH  # predefinito
+
     if uploaded_files:
         df_base = load_data()
         dfs = [df_base]
@@ -532,49 +534,22 @@ with tab2:
             except Exception as e:
                 st.error(f"Errore lettura {f.name}: {e}")
 
-        # Merge automatico
         df_merged = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['Date'])
         merged_path = os.path.join(LOG_DIR, 'merged_dataset.csv')
         df_merged.to_csv(merged_path, index=False)
         st.info(f"📊 Dataset unificato salvato in: `{merged_path}` ({len(df_merged)} righe totali)")
+        custom_dataset_path = merged_path
 
-        # Aggiorna dataset attivo
-        st.session_state['merged_path'] = merged_path
-        st.session_state['custom_data_loaded'] = True
-
-    c1, c2, c3 = st.columns([1,1,2])
-    if c1.button('Addestra / Riaddestra modello', key='train_model_btn', use_container_width=True):
-        # Se è stato caricato un dataset unificato, usalo
-        if st.session_state.get('custom_data_loaded', False):
-            DATA_PATH = st.session_state['merged_path']
+    # --- Pulsante unico di addestramento ---
+    if st.button('🚀 Addestra / Riaddestra modello', key='train_model_btn', use_container_width=True):
+        # se è stato caricato un dataset personalizzato, aggiorna il percorso temporaneamente
+        global DATA_PATH
+        old_data_path = DATA_PATH
+        DATA_PATH = custom_dataset_path
         mae, r2 = train_model()
-        st.session_state['last_mae'] = mae
-        st.session_state['last_r2'] = r2
+        DATA_PATH = old_data_path  # ripristina
         st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
-    if c1.button('Addestra / Riaddestra modello', key='train_model_btn_merged', use_container_width=True):
-        mae,r2 = train_model(); st.session_state['last_mae']=mae; st.session_state['last_r2']=r2
-        st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
-    if os.path.exists(MODEL_PATH):
-        model = load_model(); dfm = load_data()
-        if 'E_INT_Daily_KWh' in dfm.columns and 'E_INT_Daily_kWh' not in dfm.columns: dfm = dfm.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
-        for col in ['CloudCover_P','Temp_Air']:
-            if col not in dfm.columns: dfm[col]=np.nan
-        dfm = dfm.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2'])
-        Xp = dfm[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(dfm[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
-        dfm['Predetto'] = model.predict(Xp)
-        fig = go.Figure(); fig.add_trace(go.Scatter(x=dfm['E_INT_Daily_kWh'], y=dfm['Predetto'], mode='markers', marker=dict(size=5, opacity=0.6), name='Punti'))
-        minv = float(min(dfm['E_INT_Daily_kWh'].min(), dfm['Predetto'].min())); maxv = float(max(dfm['E_INT_Daily_kWh'].max(), dfm['Predetto'].max()))
-        fig.add_trace(go.Scatter(x=[minv,maxv], y=[minv,maxv], mode='lines', line=dict(color='orange', dash='dash'), name='y = x'))
-        fig.update_layout(title='📈 Reale vs Predetto (kWh/giorno)', xaxis_title='Reale (kWh)', yaxis_title='Predetto (kWh)', template='plotly_white', height=400)
-        st.plotly_chart(fig, use_container_width=True)
-        fi_path = os.path.join(LOG_DIR, 'feature_importances.csv')
-        if os.path.exists(fi_path):
-            feat = pd.read_csv(fi_path, index_col=0);
-            if feat.shape[1]==1: feat.columns=['importance']
-            figf = go.Figure(); figf.add_trace(go.Bar(x=feat.index, y=feat.iloc[:,0]))
-            figf.update_layout(title='🔍 Importanza variabili', xaxis_title='Feature', yaxis_title='Importanza', template='plotly_white', height=350)
-            st.plotly_chart(figf, use_container_width=True)
-    else: st.info('Addestra il modello per abilitare le previsioni.')
+
 
 # ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
