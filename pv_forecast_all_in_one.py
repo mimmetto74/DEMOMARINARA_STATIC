@@ -10,7 +10,7 @@ try:
     import joblib
 except ImportError:
     import pickle as joblib
-io, json, math, requests, numpy as np, pandas as pd
+import os, io, json, math, requests, numpy as np, pandas as pd
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
