@@ -1,4 +1,5 @@
 # Core dependencies
+streamlit-folium>=0.20.0
 streamlit==1.39.0
 pandas>=2.1.0
 numpy>=1.26.0
