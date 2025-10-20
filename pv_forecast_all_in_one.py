@@ -528,21 +528,21 @@ with tab2:
     )
 
     if uploaded_files:
-        df_base = load_data()
-        dfs = [df_base]
-        for f in uploaded_files:
-    try:
-        df_new = pd.read_csv(f, parse_dates=['Date'])
-        dfs.append(df_new)
-        st.success(f"✅ File aggiunto: {f.name} ({len(df_new)} righe)")
-    except Exception as e:
-                st.error(f"Errore caricamento {f.name}: {e}")
+    df_base = load_data()
+    dfs = [df_base]
+    for f in uploaded_files:
+        try:
+            df_new = pd.read_csv(f, parse_dates=['Date'])
+            dfs.append(df_new)
+            st.success(f"✅ File aggiunto: {f.name} ({len(df_new)} righe)")
+        except Exception as e:
+            st.error(f"Errore caricamento {f.name}: {e}")
 
-        df_merged = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['Date'])
-        merged_path = os.path.join(LOG_DIR, 'merged_dataset.csv')
-        df_merged.to_csv(merged_path, index=False)
-        st.info(f"📊 Dataset unificato salvato in: `{merged_path}` — {len(df_merged)} righe totali.")
-        st.session_state['custom_dataset'] = merged_path
+    df_merged = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['Date'])
+    merged_path = os.path.join(LOG_DIR, 'merged_dataset.csv')
+    df_merged.to_csv(merged_path, index=False)
+    st.info(f"📊 Dataset unificato salvato in: `{merged_path}` — {len(df_merged)} righe totali.")
+    st.session_state['custom_dataset'] = merged_path
 
     # --- Pulsante di addestramento ---
     c1, c2, c3 = st.columns([1, 1, 2])
