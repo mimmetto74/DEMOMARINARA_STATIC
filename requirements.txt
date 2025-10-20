@@ -9,3 +9,5 @@ matplotlib>=3.8
 folium>=0.15
 streamlit-folium>=0.18
 plotly
+xgboost
+tensorflow
