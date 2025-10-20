@@ -5,21 +5,6 @@ import os, io, json, math, requests, numpy as np, pandas as pd
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
-# ==================== MODELLO XGBOOST ==================== #
-from xgboost import XGBRegressor
-
-# Inizializziamo un modello XGBoost predefinito (puoi anche caricare un .json addestrato)
-model = XGBRegressor(
-    n_estimators=400,
-    learning_rate=0.05,
-    max_depth=6,
-    subsample=0.8,
-    colsample_bytree=0.8
-)
-
-st.info("⚙️ Modello XGBoost inizializzato (non ri-addestrato, usa pesi predefiniti)") 
-
-
 st.set_page_config(page_title='Solar Forecast - ROBOTRONIX for IMEPOWER', layout='wide')
 
 # ---------------------------- SECURITY / LOGIN ---------------------------- #
@@ -582,21 +567,7 @@ with tab2:
 
         # Grafico Reale vs Predetto
         import plotly.graph_objects as go
-# ==================== MODELLO XGBOOST ==================== #
-from xgboost import XGBRegressor
-
-# Inizializziamo un modello XGBoost predefinito (puoi anche caricare un .json addestrato)
-model = XGBRegressor(
-    n_estimators=400,
-    learning_rate=0.05,
-    max_depth=6,
-    subsample=0.8,
-    colsample_bytree=0.8
-)
-
-st.info("⚙️ Modello XGBoost inizializzato (non ri-addestrato, usa pesi predefiniti)") 
-
-        fig = go.Figure()
+fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=dfm['E_INT_Daily_kWh'], y=dfm['Predetto'],
             mode='markers', marker=dict(size=5, opacity=0.6), name='Punti'
@@ -670,21 +641,7 @@ with tab3:
 
                 # --- Grafico produzione e irradianza ---
                 import plotly.graph_objects as go
-# ==================== MODELLO XGBOOST ==================== #
-from xgboost import XGBRegressor
-
-# Inizializziamo un modello XGBoost predefinito (puoi anche caricare un .json addestrato)
-model = XGBRegressor(
-    n_estimators=400,
-    learning_rate=0.05,
-    max_depth=6,
-    subsample=0.8,
-    colsample_bytree=0.8
-)
-
-st.info("⚙️ Modello XGBoost inizializzato (non ri-addestrato, usa pesi predefiniti)") 
-
-                fig = go.Figure()
+fig = go.Figure()
                 if 'GlobalRad_W' in dfp.columns:
                     fig.add_trace(go.Scatter(
                         x=dfp['time'], y=dfp['GlobalRad_W'],
