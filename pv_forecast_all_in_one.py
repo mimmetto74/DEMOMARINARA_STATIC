@@ -531,11 +531,11 @@ with tab2:
         df_base = load_data()
         dfs = [df_base]
         for f in uploaded_files:
-                try:
-                df_new = pd.read_csv(f, parse_dates=['Date'])
-                dfs.append(df_new)
-                st.success(f"✅ File aggiunto: {f.name} ({len(df_new)} righe)")
-            except Exception as e:
+    try:
+        df_new = pd.read_csv(f, parse_dates=['Date'])
+        dfs.append(df_new)
+        st.success(f"✅ File aggiunto: {f.name} ({len(df_new)} righe)")
+    except Exception as e:
                 st.error(f"Errore caricamento {f.name}: {e}")
 
         df_merged = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['Date'])
