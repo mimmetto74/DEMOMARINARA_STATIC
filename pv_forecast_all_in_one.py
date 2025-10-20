@@ -716,6 +716,7 @@ with tab3:
                 st.divider()
 
 # ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
+# ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
 with tab4:
     st.subheader("🛰️ Localizzazione impianto fotovoltaico (vista satellitare)")
     st.write("Visualizzazione satellitare ad alta risoluzione tramite Esri World Imagery.")
@@ -727,30 +728,39 @@ with tab4:
     # Mostra coordinate testuali
     st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
 
-    # Import Folium e Streamlit-Folium
-    from streamlit_folium import st_folium
-    import folium
+    # ✅ Gestione sicura dell'import (evita crash se manca il modulo)
+    try:
+        from streamlit_folium import st_folium
+        import folium
 
-    # Crea la mappa satellitare
-    m = folium.Map(
-        location=[lat, lon],
-        zoom_start=17,
-        tiles='Esri.WorldImagery',  # layer satellitare ad alta risoluzione
-        attr='Tiles © Esri'
-    )
+        # Crea la mappa satellitare
+        m = folium.Map(
+            location=[lat, lon],
+            zoom_start=17,
+            tiles='Esri.WorldImagery',  # layer satellitare ad alta risoluzione
+            attr='Tiles © Esri'
+        )
 
-    # Aggiungi marker dell’impianto
-    folium.Marker(
-        [lat, lon],
-        popup=f"Impianto fotovoltaico<br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
-        tooltip="Impianto fotovoltaico",
-        icon=folium.Icon(color='orange', icon='bolt', prefix='fa')
-    ).add_to(m)
+        # Aggiungi marker dell’impianto
+        folium.Marker(
+            [lat, lon],
+            popup=f"Impianto fotovoltaico<br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
+            tooltip="Impianto fotovoltaico",
+            icon=folium.Icon(color='orange', icon='bolt', prefix='fa')
+        ).add_to(m)
 
-    # Mostra la mappa nella pagina Streamlit
-    st_folium(m, width=900, height=500)
+        # Mostra la mappa nella pagina Streamlit
+        st_folium(m, width=900, height=500)
 
-# ---- TAB 5: Stabilità previsioni ---- #
+    except ModuleNotFoundError:
+        st.warning(
+            "⚠️ Modulo **streamlit_folium** non installato.\n\n"
+            "Per visualizzare la mappa, installa il pacchetto eseguendo:\n\n"
+            "`pip install streamlit-folium`"
+        )
+    except Exception as e:
+        st.error(f"❌ Errore nella visualizzazione mappa: {e}")
+
 # ---- TAB 5: Stabilità previsioni ---- #
 with tab5:
     from datetime import datetime
