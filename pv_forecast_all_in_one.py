@@ -219,47 +219,35 @@ def train_model():
 
 # ------------------- DAILY CURVE & FORECAST ------------------- #
 
+# -*- coding: utf-8 -*-
+# --- Estratto aggiornato per funzione ibrida fisica + ML ---
+
 def compute_curve_and_daily(df, model, plant_kw):
-    """
-    Calcola la curva di produzione stimata a partire dai dati meteo.
-    Funzionalità:
-      - Conversione automatica del tempo in Europe/Rome
-      - Mantiene i dati grezzi per diagnostica
-      - Allineamento temporale corretto (nessuno shift)
-      - Compatibilità completa con Meteomatics / Open-Meteo
-      - Normalizzazione per potenza impianto
-    """
     import numpy as np
     import pandas as pd
     import pytz
+    import streamlit as st
 
-    # --- Validazione iniziale ---
     if df is None or df.empty:
         return df, 0.0, 0.0, 0.0, 0.0
 
-    # --- Parsing e ordinamento ---
     df['time'] = pd.to_datetime(df['time'], errors='coerce')
     df = df.dropna(subset=['time']).sort_values('time')
 
-    # ✅ Conversione automatica in ora locale
     try:
         tz_local = pytz.timezone("Europe/Rome")
-        # Se il timestamp non ha timezone, assumiamo UTC
         if df['time'].dt.tz is None:
             df['time'] = df['time'].dt.tz_localize(pytz.UTC)
         df['time'] = df['time'].dt.tz_convert(tz_local).dt.tz_localize(None)
     except Exception as e:
         st.warning(f"⚠️ Errore conversione fuso orario: {e}")
 
-    # --- Conversione robusta di colonne numeriche ---
+    # --- Conversione robusta colonne numeriche ---
     for col in df.columns:
         if col != 'time':
-            try:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            except Exception:
-                pass
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # --- Calcolo irradianza corretta (mantiene dati grezzi) ---
+    # --- Irradianza corretta ---
     if 'GlobalRad_W' in df.columns:
         df['rad_corr'] = df['GlobalRad_W'].fillna(0)
     elif 'G_M0_Wm2' in df.columns:
@@ -269,52 +257,53 @@ def compute_curve_and_daily(df, model, plant_kw):
         df['rad_corr'] = 0.0
         st.warning("⚠️ Nessuna colonna di irradianza trovata nei dati meteo.")
 
-    # --- Resample ogni 15 minuti (preserva media delle numeriche) ---
     df = df.set_index('time').resample('15T').mean(numeric_only=True).reset_index()
 
-    # --- Predizione modello se disponibile ---
+    # --- Parametri fisici ---
+    eta_ref = 0.18
+    gamma_pdc = -0.004
+    noct = 45.0
+    inv_eff = 0.97
+    dc_ac_ratio = 1.15
+
+    rad = df['GlobalRad_W'].fillna(df.get('rad_corr', 0.0))
+    ta = df.get('Temp_Air', pd.Series([25.0]*len(df), index=df.index)).astype(float)
+    cc = df.get('CloudCover_P', pd.Series([50.0]*len(df), index=df.index)).astype(float)
+
+    # --- Modello fisico base ---
+    t_cell = ta + (noct - 20.0)/800.0 * rad
+    cloud_factor = (1.0 - 0.30 * (cc/100.0)**1.5).clip(0.5, 1.0)
+
+    pdc_per_kwp = (rad/1000.0) * eta_ref * (1.0 + gamma_pdc*(t_cell - 25.0))
+    pdc_per_kwp = pdc_per_kwp.clip(lower=0.0)
+    pdc_kw = pdc_per_kwp * (plant_kw * dc_ac_ratio) * cloud_factor
+    pac_base = (pdc_kw * inv_eff).clip(upper=plant_kw)
+
+    # --- Modello ML per correzione ibrida ---
     if model is not None:
-        model_features = getattr(model, "feature_names_in_", [])
-        X = pd.DataFrame()
-
-        # Mappa automatica dei nomi delle feature
-        col_map = {
-            'G_M0_Wm2': 'GlobalRad_W',
-            'GlobalRad_W': 'G_M0_Wm2'
-        }
-
-        for feat in model_features:
-            if feat in df.columns:
-                X[feat] = df[feat]
-            elif feat in col_map and col_map[feat] in df.columns:
-                X[feat] = df[col_map[feat]]
-            else:
-                X[feat] = 0.0
-
         try:
-            df['kWh_curve'] = model.predict(X)
-        except ValueError as e:
-            st.warning(f"⚠️ Mismatch colonne modello: {e}. Riprovo adattando i nomi.")
-            cols = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else X.columns
-            X = X.reindex(columns=cols, fill_value=0)
-            df['kWh_curve'] = model.predict(X)
+            model_features = getattr(model, 'feature_names_in_', ['G_M0_Wm2', 'CloudCover_P', 'Temp_Air'])
+            X = pd.DataFrame()
+            for feat in model_features:
+                if feat in df.columns:
+                    X[feat] = df[feat]
+                elif feat == 'G_M0_Wm2' and 'GlobalRad_W' in df.columns:
+                    X[feat] = df['GlobalRad_W']
+                else:
+                    X[feat] = 0.0
 
-        # Normalizza rispetto alla potenza impianto
-        if df['kWh_curve'].max() > 0:
-            df['kWh_curve'] = (
-                df['kWh_curve'] / df['kWh_curve'].max()
-            ) * plant_kw
+            delta_pred = model.predict(X)
+            df['kWh_curve'] = (pac_base * (1.0 + delta_pred / plant_kw)).clip(lower=0, upper=plant_kw)
+        except Exception as e:
+            st.warning(f"⚠️ Errore correzione ML: {e}, uso solo fisica.")
+            df['kWh_curve'] = pac_base
     else:
-        # --- Fallback proporzionale all'irradianza ---
-        ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'rad_corr'
-        max_val = max(df[ref_col].max(), 1)
-        df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max_val
+        df['kWh_curve'] = pac_base
 
-    # --- Smussamento centrato (no shift temporale) ---
-    df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
+    # --- Smussamento e metriche ---
+    df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).median()
 
-    # --- Metriche giornaliere ---
-    pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)  # ogni passo = 15 min
+    pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)
     peak_kW = df['kWh_curve'].max()
     peak_pct = 100 * peak_kW / plant_kw if plant_kw > 0 else np.nan
     cloud_mean = df['CloudCover_P'].mean() if 'CloudCover_P' in df.columns else np.nan
