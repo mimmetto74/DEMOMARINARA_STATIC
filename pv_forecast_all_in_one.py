@@ -18,6 +18,42 @@ from xgboost import XGBRegressor
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
+
+
+# --------------------- Robust model loader / saver (Railway-ready) --------------------- #
+import os
+try:
+    import joblib
+except Exception:
+    import pickle as joblib  # fallback
+
+MODEL_LOAD_PATHS = [
+    "logs/model_xgb.joblib",
+    "model_xgb.joblib",
+    "rf_model.joblib",
+]
+
+def load_model():
+    """Load a pre-trained model if available, else return a fresh XGBRegressor()."""
+    for p in MODEL_LOAD_PATHS:
+        if os.path.exists(p):
+            try:
+                m = joblib.load(p)
+                print(f"Loaded model from {p}")
+                return m
+            except Exception as e:
+                print(f"Failed to load {p}: {e}")
+    print("No pretrained model found - initializing a new estimator")
+    return XGBRegressor()
+
+def save_model(model, path="logs/model_xgb.joblib"):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        joblib.dump(model, path)
+        print(f"Saved model to {path}")
+    except Exception as e:
+        print(f"Failed to save model to {path}: {e}")
+# -------------------------------------------------------------------------------------- #
 st.set_page_config(page_title='Solar Forecast - ROBOTRONIX for IMEPOWER', layout='wide')
 
 # ---------------------------- SECURITY / LOGIN ---------------------------- #
@@ -222,6 +258,7 @@ def train_model():
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
     model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
     model.fit(Xtr, ytr)
+        save_model(model)
     pred = model.predict(Xte)
     mae = float(mean_absolute_error(yte, pred))
     r2 = float(r2_score(yte, pred))
