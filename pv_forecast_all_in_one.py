@@ -198,23 +198,39 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
+# ----------------------- MACHINE LEARNING ENHANCED TRAINING ----------------------- #
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
+import numpy as np, pandas as pd
+
+def prepare_training_data(df):
+    from math import pi
+    df['hour'] = df['Date'].dt.hour + df['Date'].dt.minute / 60.0
+    df['dayofyear'] = df['Date'].dt.dayofyear
+    df['hour_sin'] = np.sin(2 * pi * df['hour'] / 24)
+    df['hour_cos'] = np.cos(2 * pi * df['hour'] / 24)
+    df['doy_sin'] = np.sin(2 * pi * df['dayofyear'] / 365)
+    df['doy_cos'] = np.cos(2 * pi * df['dayofyear'] / 365)
+    df = df.rename(columns={'G_M0_Wm2': 'GlobalRad_W'})
+    for c in ['GlobalRad_W','CloudCover_P','Temp_Air','E_INT_Daily_kWh']:
+        if c not in df.columns:
+            df[c] = 0.0
+    return df.dropna(subset=['GlobalRad_W','E_INT_Daily_kWh'])
+
 def train_model():
     df0 = load_data()
-    if 'E_INT_Daily_KWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
-        df0 = df0.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
-    for col in ['CloudCover_P','Temp_Air']:
-        if col not in df0.columns: df0[col] = np.nan
-    df = df0.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2']).copy()
-    X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
+    df = prepare_training_data(df0)
+    X = df[['GlobalRad_W','CloudCover_P','Temp_Air','hour_sin','hour_cos','doy_sin','doy_cos']]
     y = df['E_INT_Daily_kWh']
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
-    model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = HistGradientBoostingRegressor(max_depth=8, learning_rate=0.05, n_estimators=400, random_state=42)
     model.fit(Xtr, ytr)
     pred = model.predict(Xte)
     mae = float(mean_absolute_error(yte, pred))
     r2 = float(r2_score(yte, pred))
     joblib.dump({'model': model, 'features': X.columns.tolist()}, MODEL_PATH)
-    pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(LOG_DIR,'feature_importances.csv'))
+    pd.Series(model.feature_names_in_).to_csv(os.path.join(LOG_DIR,'feature_importances_hybrid.csv'), index=False)
     return mae, r2
 
 # ------------------- DAILY CURVE & FORECAST ------------------- #
