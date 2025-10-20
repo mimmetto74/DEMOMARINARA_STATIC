@@ -531,7 +531,7 @@ with tab2:
         df_base = load_data()
         dfs = [df_base]
         for f in uploaded_files:
-            try:
+                try:
                 df_new = pd.read_csv(f, parse_dates=['Date'])
                 dfs.append(df_new)
                 st.success(f"✅ File aggiunto: {f.name} ({len(df_new)} righe)")
