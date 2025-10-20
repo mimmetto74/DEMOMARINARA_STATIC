@@ -212,24 +212,28 @@ from sklearn.metrics import mean_absolute_error, r2_score
 
 def train_model():
     df0 = load_data()
-    if 'E_INT_Daily_KWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
-        df0 = df0.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
-    for col in ['CloudCover_P','Temp_Air']:
-        if col not in df0.columns: df0[col] = np.nan
-    df = df0.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2']).copy()
-    X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
+    if 'E_INT_Daily_kWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
+        df0 = df0.rename(columns={'E_INT_Daily_kWh': 'E_INT_Daily_kWh'})
+    for col in ['CloudCover_p', 'Temp_Air']:
+        if col not in df0.columns:
+            df0[col] = np.nan
+    df = df0.dropna(subset=['E_INT_Daily_kWh', 'G_MQ_Wm2']).copy()
+    X = df[['G_MQ_Wm2', 'CloudCover_p', 'Temp_Air']].fillna(df[['G_MQ_Wm2', 'CloudCover_p', 'Temp_Air']].mean())
     y = df['E_INT_Daily_kWh']
+
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
     model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
     model.fit(Xtr, ytr)
-        save_model(model)
-        st.success("💾 Modello salvato correttamente dopo l’addestramento!")
+    save_model(model)
+    st.success("💾 Modello salvato correttamente dopo l’addestramento!")
+
     pred = model.predict(Xte)
     mae = float(mean_absolute_error(yte, pred))
     r2 = float(r2_score(yte, pred))
     joblib.dump({'model': model, 'features': X.columns.tolist()}, MODEL_PATH)
-    pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(LOG_DIR,'feature_importances.csv'))
+    pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(MODEL_PATH, 'feature_importances.csv'))
     return mae, r2
+
 
 # ------------------- DAILY CURVE & FORECAST ------------------- #
 
