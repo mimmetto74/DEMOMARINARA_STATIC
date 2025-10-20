@@ -427,41 +427,6 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
 
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
-
-
-    # ✅ Conversione robusta UTC → Europe/Rome
-    try:
-        from zoneinfo import ZoneInfo
-        df['time'] = pd.to_datetime(df['time'])
-        if df['time'].dt.tz is None:
-        # Se non ha timezone, aggiungiamo UTC
-           df['time'] = df['time'].dt.tz_localize('UTC')
-    # In entrambi i casi, convertiamo in ora italiana
-        df['time'] = df['time'].dt.tz_convert('Europe/Rome')
-    except Exception as e:
-        st.warning(f"⚠️ Impossibile convertire timezone: {e}")
-
-
-    # --- Calcolo curve e parametri ---
-    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
-
-    # --- Log ---
-    write_log(timestamp=datetime.utcnow().isoformat(), day_label=label, provider=provider, status=status, url=url,
-              lat=lat, lon=lon, tilt=tilt, orient=orient,
-              sum_rad_corr=float(df2['rad_corr'].sum()), pred_kwh=float(pred_kwh),
-              peak_kW=float(peak_kW), cloud_mean=float(cloud_mean))
-
-    # --- Autosave opzionale ---
-    if autosave:
-        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
-        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
-        pd.DataFrame([{
-            'date': str(day),
-            'energy_kWh': float(pred_kwh),
-            'peak_kW': float(peak_kW),
-            'cloud_mean': float(cloud_mean)
-        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
-
     return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
 
 
@@ -567,7 +532,7 @@ with tab2:
 
         # Grafico Reale vs Predetto
         import plotly.graph_objects as go
-fig = go.Figure()
+        fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=dfm['E_INT_Daily_kWh'], y=dfm['Predetto'],
             mode='markers', marker=dict(size=5, opacity=0.6), name='Punti'
@@ -586,6 +551,126 @@ fig = go.Figure()
             height=400
         )
         st.plotly_chart(fig, use_container_width=True)
+
+
+        # ===================== 📓 LSTM Trainer (integrato) ===================== #
+        st.markdown("### 📓 LSTM Trainer (orario / giornaliero)")
+        st.caption("Addestra un modello LSTM direttamente qui. Carica un CSV storico (2020–2025).")
+
+        with st.expander("Apri trainer LSTM", expanded=False):
+            csv_lstm = st.file_uploader("Carica CSV storico (usa quello di default se vuoto)", type=["csv"], key="lstm_csv")
+            target_type = st.radio("Target", ["⚡ Potenza oraria (kW)", "☀️ Energia giornaliera (kWh/giorno)"], horizontal=True)
+            epochs = st.slider("Epoche", 5, 50, 15, 1)
+            lookback = st.slider("Finestra temporale (ore/giorni)", 12, 72, 24, 1)
+            train_btn = st.button("🚀 Addestra LSTM", use_container_width=True, key="train_lstm_btn")
+
+            if train_btn:
+                try:
+                    import pandas as pd, numpy as np
+                    from sklearn.preprocessing import MinMaxScaler
+                    from tensorflow.keras.models import Sequential
+                    from tensorflow.keras.layers import LSTM, Dense, Dropout
+                    from tensorflow.keras.callbacks import EarlyStopping
+                    import io, os
+
+                    # Carica dataset
+                    if csv_lstm is not None:
+                        df_all = pd.read_csv(csv_lstm, parse_dates=["Date"], dayfirst=False, infer_datetime_format=True)
+                    else:
+                        df_all = load_data()
+
+                    # Normalizza nomi colonne
+                    if "E_INT_Daily_KWh" in df_all.columns and "E_INT_Daily_kWh" not in df_all.columns:
+                        df_all = df_all.rename(columns={"E_INT_Daily_KWh": "E_INT_Daily_kWh"})
+
+                    # DAILY trainer
+                    if target_type.startswith("☀️"):
+                        use_cols = ["G_M0_Wm2", "CloudCover_P", "Temp_Air", "E_INT_Daily_kWh"]
+                        for c in use_cols:
+                            if c not in df_all.columns:
+                                st.error(f"Colonna mancante per il trainer giornaliero: {c}")
+                                st.stop()
+                        df_daily = df_all.dropna(subset=use_cols).copy()
+                        df_daily = df_daily.sort_values("Date")
+                        X = df_daily[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].values.astype("float32")
+                        y = df_daily["E_INT_Daily_kWh"].values.astype("float32").reshape(-1,1)
+
+                        sx, sy = MinMaxScaler(), MinMaxScaler()
+                        Xs = sx.fit_transform(X); ys = sy.fit_transform(y)
+
+                        # crea sequenze di lunghezza `lookback` (in giorni)
+                        def mkseq(Xs, ys, win):
+                            Xseq, yseq = [], []
+                            for i in range(win, len(Xs)):
+                                Xseq.append(Xs[i-win:i, :])
+                                yseq.append(ys[i, 0])
+                            return np.array(Xseq), np.array(yseq)
+                        Xseq, yseq = mkseq(Xs, ys, lookback)
+                        n_steps, n_feat = Xseq.shape[1], Xseq.shape[2]
+
+                        model = Sequential([LSTM(64, input_shape=(n_steps, n_feat)), Dropout(0.2), Dense(1)])
+                        model.compile(optimizer="adam", loss="mae")
+                        es = EarlyStopping(patience=5, restore_best_weights=True, monitor="loss")
+                        prog = st.progress(0)
+                        for ep in range(epochs):
+                            hist = model.fit(Xseq, yseq, epochs=1, batch_size=32, verbose=0, callbacks=[es])
+                            prog.progress(int((ep+1)/epochs*100))
+                            st.write(f"Epoca {ep+1}/{epochs} - loss: {hist.history['loss'][-1]:.4f}")
+
+                        # Salva scaler e modello
+                        os.makedirs(LOG_DIR, exist_ok=True)
+                        model_path = os.path.join(LOG_DIR, "lstm_daily.keras")
+                        model.save(model_path)
+                        np.save(os.path.join(LOG_DIR, "lstm_daily_sx.npy"), sx.scale_)
+                        np.save(os.path.join(LOG_DIR, "lstm_daily_sy.npy"), sy.scale_)
+                        st.success(f"✅ Modello LSTM giornaliero salvato in: {model_path}")
+
+                    # HOURLY trainer
+                    else:
+                        # Richiede colonne 'time' e 'Potenza_kW' per il target orario
+                        need_cols = ["time", "G_M0_Wm2", "CloudCover_P", "Temp_Air", "Potenza_kW"]
+                        missing = [c for c in need_cols if c not in df_all.columns]
+                        if missing:
+                            st.error("Per il trainer orario servono le colonne: " + ", ".join(need_cols) + f". Mancano: {missing}")
+                            st.stop()
+
+                        dfo = df_all.dropna(subset=need_cols).copy()
+                        dfo["time"] = pd.to_datetime(dfo["time"])
+                        dfo = dfo.sort_values("time")
+                        X = dfo[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].values.astype("float32")
+                        y = dfo["Potenza_kW"].values.astype("float32").reshape(-1,1)
+
+                        sx, sy = MinMaxScaler(), MinMaxScaler()
+                        Xs = sx.fit_transform(X); ys = sy.fit_transform(y)
+
+                        def mkseq(Xs, ys, win):
+                            Xseq, yseq = [], []
+                            for i in range(win, len(Xs)):
+                                Xseq.append(Xs[i-win:i, :])
+                                yseq.append(ys[i, 0])
+                            return np.array(Xseq), np.array(yseq)
+                        Xseq, yseq = mkseq(Xs, ys, lookback)
+                        n_steps, n_feat = Xseq.shape[1], Xseq.shape[2]
+
+                        model = Sequential([LSTM(64, input_shape=(n_steps, n_feat)), Dropout(0.2), Dense(1)])
+                        model.compile(optimizer="adam", loss="mae")
+                        es = EarlyStopping(patience=5, restore_best_weights=True, monitor="loss")
+                        prog = st.progress(0)
+                        for ep in range(epochs):
+                            hist = model.fit(Xseq, yseq, epochs=1, batch_size=64, verbose=0, callbacks=[es])
+                            prog.progress(int((ep+1)/epochs*100))
+                            st.write(f"Epoca {ep+1}/{epochs} - loss: {hist.history['loss'][-1]:.4f}")
+
+                        os.makedirs(LOG_DIR, exist_ok=True)
+                        model_path = os.path.join(LOG_DIR, "lstm_hourly.keras")
+                        model.save(model_path)
+                        np.save(os.path.join(LOG_DIR, "lstm_hourly_sx.npy"), sx.scale_)
+                        np.save(os.path.join(LOG_DIR, "lstm_hourly_sy.npy"), sy.scale_)
+                        st.success(f"✅ Modello LSTM orario salvato in: {model_path}")
+
+                except Exception as e:
+                    st.error(f"Errore trainer LSTM: {e}")
+        # =================== fine LSTM Trainer =================== #
 
 # ---- TAB 3: Previsioni (4 giorni) ---- #
 # ---- TAB 3: Previsioni (4 giorni) ---- #
@@ -641,7 +726,7 @@ with tab3:
 
                 # --- Grafico produzione e irradianza ---
                 import plotly.graph_objects as go
-fig = go.Figure()
+                fig = go.Figure()
                 if 'GlobalRad_W' in dfp.columns:
                     fig.add_trace(go.Scatter(
                         x=dfp['time'], y=dfp['GlobalRad_W'],
