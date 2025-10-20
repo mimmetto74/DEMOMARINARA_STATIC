@@ -1,295 +1,833 @@
-
 # -*- coding: utf-8 -*-
-# PV Forecast - Monitor Ready (Railway-friendly)
-
-import os
-import io
-import json
-import math
-import requests
-import numpy as np
-import pandas as pd
+# Solar Forecast - ROBOTRONIX for IMEPOWER (SECURE build)
+# Includes: login page, embedded Meteomatics credentials, provider fallback, RF model, charts, exports, comparison.
+import os, io, json, math, joblib, requests, numpy as np, pandas as pd
 from datetime import datetime, timedelta, timezone
-
 import streamlit as st
 import plotly.graph_objects as go
 
-# ---------------- Safe XGBoost import with RF fallback ---------------- #
-try:
-    from xgboost import XGBRegressor
-    XGB_OK = True
-except Exception:
-    from sklearn.ensemble import RandomForestRegressor as XGBRegressor
-    XGB_OK = False
-# --------------------------------------------------------------------- #
+st.set_page_config(page_title='Solar Forecast - ROBOTRONIX for IMEPOWER', layout='wide')
 
-# ---------------- Logging ---------------- #
-def write_log(msg: str):
-    os.makedirs("logs", exist_ok=True)
-    with open("logs/errors.log", "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+# ---------------------------- SECURITY / LOGIN ---------------------------- #
+APP_USER = os.environ.get('APP_USER', 'admin')
+APP_PASS = os.environ.get('APP_PASS', 'robotronix')
 
-# ---------------- Model load/save ---------------- #
-try:
-    import joblib
-except Exception:
-    import pickle as joblib  # fallback
+def render_login():
+    st.title('🔐 Accesso richiesto')
+    st.write('Inserisci le credenziali per accedere all\'applicazione.')
+    u = st.text_input('Username', value='', key='login_user')
+    p = st.text_input('Password', value='', type='password', key='login_pass')
+    go_btn = st.button('Accedi')
+    if go_btn:
+        if u == APP_USER and p == APP_PASS:
+            st.session_state['authenticated'] = True
+            st.success('Accesso effettuato!')
+            st.rerun()
+        else:
+            st.error('❌ Credenziali non valide')
 
-MODEL_PATHS = ["logs/model_xgb.joblib", "model_xgb.joblib", "rf_model.joblib"]
-MODEL_SOURCE = None
+if not st.session_state.get('authenticated', False):
+    render_login()
+    st.stop()
+
+# ---------------------------- CONFIG ---------------------------- #
+DATA_PATH = os.environ.get('PV_DAILY_DATA', 'Dataset_Daily_EnergiaSeparata_2020_2025.csv')
+MODEL_PATH = os.environ.get('PV_MODEL_PATH', 'rf_model.joblib')
+LOG_DIR = os.environ.get('PV_LOG_DIR', 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+
+DEFAULT_LAT = float(os.environ.get('PV_LAT', '40.643278'))
+DEFAULT_LON = float(os.environ.get('PV_LON', '16.986083'))
+DEFAULT_TILT = float(os.environ.get('PV_TILT', '10'))
+DEFAULT_ORIENT = float(os.environ.get('PV_ORIENT', '180'))
+DEFAULT_PLANT_KW = float(os.environ.get('PV_PLANT_KW', '947.25'))
+
+# ----------------------- METEOMATICS CREDENTIALS (embedded) ----------------------- #
+MM_USER = 'robotronixsrl_daniello_fabio'
+MM_PASS = 'xaRVRh8sa5EV70F0B88u'
+
+# -------------------------- UTILITIES -------------------------- #
+def write_log(**kwargs):
+    try:
+        ts = datetime.utcnow().strftime('%Y%m%d')
+        with open(os.path.join(LOG_DIR, f'forecast_log_{ts}.jsonl'), 'a', encoding='utf-8') as f:
+            f.write(json.dumps(kwargs, default=str) + '\n')
+    except Exception:
+        pass
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_data():
+    df = pd.read_csv(DATA_PATH, parse_dates=['Date'])
+    if 'E_INT_Daily_KWh' in df.columns and 'E_INT_Daily_kWh' not in df.columns:
+        df = df.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
+    return df
 
 def load_model():
-    global MODEL_SOURCE
-    for p in MODEL_PATHS:
-        if os.path.exists(p):
-            try:
-                m = joblib.load(p)
-                MODEL_SOURCE = p
-                return m
-            except Exception as e:
-                write_log(f"Failed to load {p}: {e}")
-    MODEL_SOURCE = "NEW"
-    return XGBRegressor()
+    if not os.path.exists(MODEL_PATH):
+        return None
+    obj = joblib.load(MODEL_PATH)
+    if isinstance(obj, dict) and 'model' in obj:
+        return obj['model']
+    return obj
 
-def save_model(model, path="logs/model_xgb.joblib"):
+# ----------------------- FETCH PROVIDERS ------------------------ #
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None):
+    # Robust error handling with explicit messages
+    if not MM_USER or not MM_PASS:
+        raise RuntimeError('Credenziali Meteomatics mancanti')
+    if tilt is not None and orient is not None and float(tilt) > 0:
+        rad_param = f'global_rad_tilt_{int(round(float(tilt)))}_orientation_{int(round(float(orient)))}:W'
+    else:
+        rad_param = 'global_rad:W'
+    params = f'{rad_param},total_cloud_cover:p,t_2m:C'
+    url = f'https://api.meteomatics.com/{start_iso}--{end_iso}:PT15M/{params}/{lat},{lon}/json'
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        joblib.dump(model, path)
+        r = requests.get(url, auth=(MM_USER, MM_PASS), timeout=30)
+    except requests.Timeout as e:
+        raise RuntimeError('Timeout contattando Meteomatics (30s)') from e
     except Exception as e:
-        write_log(f"Failed to save model: {e}")
-# ------------------------------------------------- #
+        raise RuntimeError(f'Errore rete Meteomatics: {e}') from e
+    if r.status_code == 401:
+        raise RuntimeError('401 Unauthorized: credenziali Meteomatics non valide')
+    if r.status_code == 404:
+        raise RuntimeError('404: Nessun dato disponibile per il periodo richiesto')
+    if not r.ok:
+        raise RuntimeError(f'HTTP {r.status_code}: {r.text[:200]}')
+    try:
+        j = r.json()
+    except Exception as e:
+        raise RuntimeError('Risposta non in formato JSON valida da Meteomatics') from e
+    rows = []
+    for blk in j.get('data', []):
+        prm = blk.get('parameter')
+        col = 'GlobalRad_W'
+        if prm == 'total_cloud_cover:p':
+            col = 'CloudCover_P'
+        elif prm == 't_2m:C':
+            col = 'Temp_Air'
+        for d in blk.get('coordinates', [{}])[0].get('dates', []):
+            rows.append({'time': d.get('date'), col: d.get('value')})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return url, df
+    df['time'] = pd.to_datetime(df['time'])
+    df = df.groupby('time', as_index=False).mean().sort_values('time')
+    for c in ['GlobalRad_W','CloudCover_P','Temp_Air']:
+        if c not in df.columns: df[c] = np.nan
+    df['provider'] = 'Meteomatics'
+    return url, df
 
-# ---------------- Weather (Open-Meteo) ---------------- #
-def fetch_open_meteo(lat, lon, start_date, end_date, tz="Europe/Rome"):
-    url = (
-        "https://api.open-meteo.com/v1/forecast?"
-        f"latitude={lat}&longitude={lon}"
-        "&hourly=temperature_2m,cloudcover,global_tilted_irradiance"
-        f"&timezone={tz.replace('/', '%2F')}"
-        f"&start_date={start_date}&end_date={end_date}"
-    )
-    r = requests.get(url, timeout=20)
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
+    base = 'https://api.open-meteo.com/v1/forecast'
+    params = (f'?latitude={lat}&longitude={lon}&hourly=direct_radiation,cloudcover,temperature_2m'
+              f'&start_date={start_date}&end_date={end_date}&timezone=UTC')
+    url = base + params
+    r = requests.get(url, timeout=30)
     r.raise_for_status()
-    data = r.json()
-    df = pd.DataFrame({
-        "datetime": pd.to_datetime(data["hourly"]["time"]),
-        "Temp_Air": data["hourly"]["temperature_2m"],
-        "CloudCover_P": data["hourly"]["cloudcover"],
-        "G_M0_Wm2": data["hourly"]["global_tilted_irradiance"],
-    })
-    return df
-# ------------------------------------------------------ #
+    j = r.json()
+    h = j.get('hourly', {})
+    times = pd.to_datetime(h.get('time', []))
+    if len(times) == 0:
+        return url, pd.DataFrame()
+    df = pd.DataFrame({'time': times})
+    if 'direct_radiation' in h: df['GlobalRad_W'] = pd.Series(h['direct_radiation']).astype(float)
+    if 'cloudcover' in h: df['CloudCover_P'] = pd.Series(h['cloudcover']).astype(float)
+    if 'temperature_2m' in h: df['Temp_Air'] = pd.Series(h['temperature_2m']).astype(float)
+    for c in ['GlobalRad_W','CloudCover_P','Temp_Air']:
+        if c not in df.columns: df[c] = np.nan
+    df = df.set_index('time').resample('15min').interpolate().reset_index()
+    df['provider'] = 'Open-Meteo'
+    return url, df
+    
+# ---------------------- STABILITY UTILS ---------------------- #
+BASELINE_PATH = os.path.join(LOG_DIR, 'baseline_today.json')
 
-# ---------------- Forecast computation ---------------- #
-def compute_forecast_for_day(date_obj, model, lat, lon, plant_kw):
-    start = date_obj.strftime("%Y-%m-%d")
-    end = (date_obj + timedelta(days=1)).strftime("%Y-%m-%d")
-
+def load_baseline():
     try:
-        df = fetch_open_meteo(lat, lon, start, end)
-    except Exception as e:
-        write_log(f"Open-Meteo error: {e}")
-        raise
-
-    # Features
-    feats = ["G_M0_Wm2", "CloudCover_P", "Temp_Air"]
-    for c in feats:
-        if c not in df.columns:
-            df[c] = 0.0
-    X = df[feats].values.astype("float32")
-
-    # Predict power (kW). If model is unfitted, fit a trivial baseline.
-    try:
-        y = model.predict(X)
+        if os.path.exists(BASELINE_PATH):
+            with open(BASELINE_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
     except Exception:
-        # quick baseline fit to avoid NotFittedError
-        from sklearn.ensemble import RandomForestRegressor
-        baseline = RandomForestRegressor(n_estimators=50, random_state=42)
-        # fabricate a minimal target near irradiance scaled
-        y_fake = (df["G_M0_Wm2"].values / max(df["G_M0_Wm2"].max(), 1.0)) * plant_kw
-        baseline.fit(X, y_fake)
-        y = baseline.predict(X)
+        pass
+    return None
 
-    # scale to plant size if needed (already roughly scaled via model)
-    df["Produzione_stimata_kW"] = np.clip(y, 0, None)
-    return df
+def save_baseline(payload: dict):
+    try:
+        with open(BASELINE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, default=str, indent=2)
+    except Exception as e:
+        st.warning(f'Impossibile salvare baseline: {e}')
 
-# ---------------- Utility: integrate absolute difference ---------------- #
-def integrate_abs_difference(df_new, df_ref, col="Produzione_stimata_kW"):
-    m = pd.merge(df_new[["datetime", col]].copy(), df_ref[["datetime", col]].copy(),
-                 on="datetime", suffixes=("_new", "_ref"))
-    m = m.sort_values("datetime")
-    # compute absolute diff
-    diff = (m[f"{col}_new"] - m[f"{col}_ref"]).abs().values
-    # compute dt in hours from timestamps (handle 15-min)
-    if len(m) >= 2:
-        dt_hours = (m["datetime"].diff().dt.total_seconds().fillna(0).replace(0, np.nan).median() or 3600.0) / 3600.0
+def send_alert_email(subject: str, body: str, rcpt: str) -> bool:
+    """Invia email via SMTP se le variabili d'ambiente sono configurate."""
+    host = os.environ.get('SMTP_SERVER')
+    port = int(os.environ.get('SMTP_PORT', '587'))
+    user = os.environ.get('SMTP_USER')
+    pw   = os.environ.get('SMTP_PASS')
+    if not (host and user and pw and rcpt):
+        st.info('SMTP non configurato (SMTP_SERVER/SMTP_PORT/SMTP_USER/SMTP_PASS o destinatario mancanti).')
+        return False
+    try:
+        from email.mime.text import MIMEText
+        import smtplib
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = user
+        msg['To'] = rcpt
+        with smtplib.SMTP(host, port, timeout=20) as s:
+            s.starttls()
+            s.login(user, pw)
+            s.sendmail(user, [rcpt], msg.as_string())
+        return True
+    except Exception as e:
+        st.error(f'Errore invio email: {e}')
+        return False
+
+def compute_energy_for_today(model, lat, lon, tilt, orient, provider_pref, plant_kw):
+    """Ricalcola la previsione per Oggi e ritorna (kWh, df, provider, status, url)."""
+    dfp, energy, peak_kW, peak_pct, cloud_mean, provider, status, url = forecast_for_day(
+        lat=lat, lon=lon, offset_days=0, label='Oggi', model=model,
+        tilt=tilt, orient=orient, provider_pref=provider_pref, plant_kw=plant_kw, autosave=False
+    )
+    return float(energy), dfp, provider, status, url
+
+# ----------------------- MODEL TRAINING ------------------------ #
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
+
+def train_model():
+    df0 = load_data()
+    if 'E_INT_Daily_KWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
+        df0 = df0.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
+    for col in ['CloudCover_P','Temp_Air']:
+        if col not in df0.columns: df0[col] = np.nan
+    df = df0.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2']).copy()
+    X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
+    y = df['E_INT_Daily_kWh']
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
+    model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
+    model.fit(Xtr, ytr)
+    pred = model.predict(Xte)
+    mae = float(mean_absolute_error(yte, pred))
+    r2 = float(r2_score(yte, pred))
+    joblib.dump({'model': model, 'features': X.columns.tolist()}, MODEL_PATH)
+    pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(LOG_DIR,'feature_importances.csv'))
+    return mae, r2
+
+# ------------------- DAILY CURVE & FORECAST ------------------- #
+
+def compute_curve_and_daily(df, model, plant_kw):
+    """
+    Calcola la curva di produzione stimata a partire dai dati meteo.
+    Funzionalità:
+      - Conversione automatica del tempo in Europe/Rome
+      - Mantiene i dati grezzi per diagnostica
+      - Allineamento temporale corretto (nessuno shift)
+      - Compatibilità completa con Meteomatics / Open-Meteo
+      - Normalizzazione per potenza impianto
+    """
+    import numpy as np
+    import pandas as pd
+    import pytz
+
+    # --- Validazione iniziale ---
+    if df is None or df.empty:
+        return df, 0.0, 0.0, 0.0, 0.0
+
+    # --- Parsing e ordinamento ---
+    df['time'] = pd.to_datetime(df['time'], errors='coerce')
+    df = df.dropna(subset=['time']).sort_values('time')
+
+    # ✅ Conversione automatica in ora locale
+    try:
+        tz_local = pytz.timezone("Europe/Rome")
+        # Se il timestamp non ha timezone, assumiamo UTC
+        if df['time'].dt.tz is None:
+            df['time'] = df['time'].dt.tz_localize(pytz.UTC)
+        df['time'] = df['time'].dt.tz_convert(tz_local).dt.tz_localize(None)
+    except Exception as e:
+        st.warning(f"⚠️ Errore conversione fuso orario: {e}")
+
+    # --- Conversione robusta di colonne numeriche ---
+    for col in df.columns:
+        if col != 'time':
+            try:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            except Exception:
+                pass
+
+    # --- Calcolo irradianza corretta (mantiene dati grezzi) ---
+    if 'GlobalRad_W' in df.columns:
+        df['rad_corr'] = df['GlobalRad_W'].fillna(0)
+    elif 'G_M0_Wm2' in df.columns:
+        df['rad_corr'] = df['G_M0_Wm2'].fillna(0)
+        df = df.rename(columns={'G_M0_Wm2': 'GlobalRad_W'})
     else:
-        dt_hours = 1.0
-    integral = float(np.trapz(diff, dx=dt_hours))
-    return integral, m
+        df['rad_corr'] = 0.0
+        st.warning("⚠️ Nessuna colonna di irradianza trovata nei dati meteo.")
 
-# ---------------- Streamlit App ---------------- #
-st.set_page_config(page_title="PV Forecast - Monitor Ready", layout="wide")
-st.title("🔆 PV Forecast — Monitor & Save (Railway-ready)")
+    # --- Resample ogni 15 minuti (preserva media delle numeriche) ---
+    df = df.set_index('time').resample('15T').mean(numeric_only=True).reset_index()
 
-with st.sidebar:
-    st.header("⚙️ Parametri")
-    lat = st.number_input("Latitudine", value=40.85, format="%.6f")
-    lon = st.number_input("Longitudine", value=17.130000, format="%.6f")
-    plant_kw = st.number_input("Potenza impianto (kW)", value=50.0, min_value=1.0, step=1.0)
-    st.caption("Se XGBoost non è disponibile sull'hosting, userà automaticamente RandomForest.")
+    # --- Predizione modello se disponibile ---
+    if model is not None:
+        model_features = getattr(model, "feature_names_in_", [])
+        X = pd.DataFrame()
 
-# Load model and show source
-model = load_model()
-if MODEL_SOURCE == "NEW":
-    st.info("⚙️ Nessun modello trovato — inizializzato uno nuovo")
-else:
-    st.success(f"🧠 Modello caricato da: {MODEL_SOURCE}")
+        # Mappa automatica dei nomi delle feature
+        col_map = {
+            'G_M0_Wm2': 'GlobalRad_W',
+            'GlobalRad_W': 'G_M0_Wm2'
+        }
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📥 Dati", "🧠 Modello", "🔮 Previsioni", "📤 Export", "📊 Monitoraggio"])
-
-with tab2:
-    st.subheader("🧠 Modello")
-    st.write("Qui puoi *(opzionale)* ri-addestrare il modello veloce di baseline con un CSV storico.\n"
-             "In assenza di dataset, verrà usata una logica base legata all'irradianza.")
-    uploaded = st.file_uploader("Carica CSV storico (opzionale)", type=["csv"])
-    if uploaded is not None:
-        try:
-            dfh = pd.read_csv(uploaded)
-            cols = ["G_M0_Wm2", "CloudCover_P", "Temp_Air", "Produzione_stimata_kW"]
-            if not all(c in dfh.columns for c in cols):
-                st.warning(f"Nel CSV devono esserci le colonne: {cols}")
+        for feat in model_features:
+            if feat in df.columns:
+                X[feat] = df[feat]
+            elif feat in col_map and col_map[feat] in df.columns:
+                X[feat] = df[col_map[feat]]
             else:
-                from sklearn.model_selection import train_test_split
-                from sklearn.metrics import mean_absolute_error, r2_score
-                X = dfh[["G_M0_Wm2", "CloudCover_P", "Temp_Air"]].values
-                y = dfh["Produzione_stimata_kW"].values
-                Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42)
-                try:
-                    model.fit(Xtr, ytr)
-                    save_model(model)
-                    st.success("💾 Modello salvato correttamente dopo l’addestramento!")
-                    pred = model.predict(Xte)
-                    st.metric("MAE (kW)", f"{mean_absolute_error(yte, pred):.2f}")
-                    st.metric("R²", f"{r2_score(yte, pred):.3f}")
-                except Exception as e:
-                    write_log(f"Train error: {e}")
-                    st.error(f"Errore training: {e}")
-        except Exception as e:
-            write_log(f"CSV read error: {e}")
-            st.error(f"Errore lettura CSV: {e}")
+                X[feat] = 0.0
 
-with tab3:
-    st.subheader("🔮 Previsioni")
-    tz = "Europe/Rome"
-    today = datetime.now().date()
-    days = {
-        "Ieri": today - timedelta(days=1),
-        "Oggi": today,
-        "Domani": today + timedelta(days=1),
-        "Dopodomani": today + timedelta(days=2),
-    }
-
-    cols = st.columns(4)
-    forecasts = {}
-    for i, (label, d) in enumerate(days.items()):
-        with cols[i]:
-            try:
-                df = compute_forecast_for_day(d, model, lat, lon, plant_kw)
-                forecasts[label] = df
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df["datetime"], y=df["G_M0_Wm2"], name="🌞 Irradianza (W/m²)", mode="lines"))
-                fig.add_trace(go.Scatter(x=df["datetime"], y=df["Produzione_stimata_kW"], name="⚡ Produzione (kW)", mode="lines"))
-                fig.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10), title=label)
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                write_log(f"Forecast {label} error: {e}")
-                st.error(f"Errore previsione {label}: {e}")
-
-    # Save "Domani" automatically
-    if "Domani" in forecasts:
         try:
-            df_tom = forecasts["Domani"].copy()
-            os.makedirs("logs/forecasts", exist_ok=True)
-            fname = datetime.now().strftime("%Y-%m-%d_forecast_tomorrow.csv")
-            path = os.path.join("logs/forecasts", fname)
-            df_tom.to_csv(path, index=False)
-            st.success(f"💾 Previsione di domani salvata in {path}")
-        except Exception as e:
-            write_log(f"Save tomorrow error: {e}")
-            st.error(f"Errore salvataggio previsione 'Domani': {e}")
+            df['kWh_curve'] = model.predict(X)
+        except ValueError as e:
+            st.warning(f"⚠️ Mismatch colonne modello: {e}. Riprovo adattando i nomi.")
+            cols = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else X.columns
+            X = X.reindex(columns=cols, fill_value=0)
+            df['kWh_curve'] = model.predict(X)
 
-with tab5:
-    st.subheader("📊 Monitoraggio variazione previsioni")
-    # Optional autorefresh every 15 minutes
-    try:
-        from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=15 * 60 * 1000, key="forecast_refresh")
-        st.caption("⏱️ Aggiornamento automatico attivo (15 minuti)")
-    except Exception:
-        st.caption("⏱️ Autorefresh non disponibile: aggiorna manualmente la pagina")
-
-    # Load latest saved "tomorrow" curve
-    import glob
-    files = sorted(glob.glob(os.path.join("logs/forecasts", "*_forecast_tomorrow.csv")))
-    if not files:
-        st.warning("⚙️ Nessuna previsione 'Domani' salvata disponibile. Vai sul Tab Previsioni per generarla.")
+        # Normalizza rispetto alla potenza impianto
+        if df['kWh_curve'].max() > 0:
+            df['kWh_curve'] = (
+                df['kWh_curve'] / df['kWh_curve'].max()
+            ) * plant_kw
     else:
-        last_file = files[-1]
+        # --- Fallback proporzionale all'irradianza ---
+        ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'rad_corr'
+        max_val = max(df[ref_col].max(), 1)
+        df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max_val
+
+    # --- Smussamento centrato (no shift temporale) ---
+    df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
+
+    # --- Metriche giornaliere ---
+    pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)  # ogni passo = 15 min
+    peak_kW = df['kWh_curve'].max()
+    peak_pct = 100 * peak_kW / plant_kw if plant_kw > 0 else np.nan
+    cloud_mean = df['CloudCover_P'].mean() if 'CloudCover_P' in df.columns else np.nan
+
+    return df, float(pred_kwh), float(peak_kW), float(peak_pct), float(cloud_mean)
+
+
+def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
+    """Genera la previsione per un giorno specifico (ieri/oggi/domani...)"""
+    day = (datetime.now(timezone.utc).date() + timedelta(days=offset_days))
+    start_iso = f'{day}T00:00:00Z'
+    end_iso = f'{day + timedelta(days=1)}T00:00:00Z'
+    provider, status, url, df = 'Meteomatics', 'OK', '', None
+
+    # --- Provider fallback ---
+    def try_meteomatics():
         try:
-            df_ref = pd.read_csv(last_file, parse_dates=["datetime"])
-            st.info(f"🧠 Curva di riferimento: {os.path.basename(last_file)}")
+            return (*fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=tilt, orient=orient), 'Meteomatics', 'OK')
         except Exception as e:
-            write_log(f"Read saved curve error: {e}")
-            st.error(f"Errore lettura curva salvata: {e}")
-            df_ref = None
+            return ('', None, 'Meteomatics', f'ERROR: {e}')
 
-        if df_ref is not None:
-            try:
-                # Compute a fresh forecast for "tomorrow" (same target day as reference file name date or relative)
-                target_day = datetime.now().date() + timedelta(days=1)
-                df_new = compute_forecast_for_day(target_day, model, lat, lon, plant_kw)
-                # Ensure datetime type
-                df_new["datetime"] = pd.to_datetime(df_new["datetime"])
-                df_ref["datetime"] = pd.to_datetime(df_ref["datetime"])
+    def try_openmeteo():
+        try:
+            return (*fetch_openmeteo_hourly(lat, lon, str(day), str(day + timedelta(days=1))), 'Open-Meteo', 'OK')
+        except Exception as e:
+            return ('', None, 'Open-Meteo', f'ERROR: {e}')
 
-                integral_diff, merged = integrate_abs_difference(df_new, df_ref, "Produzione_stimata_kW")
+    # --- Provider selection ---
+    if provider_pref == 'Meteomatics':
+        url, df, provider, status = try_meteomatics()
+        if df is None or df.empty:
+            url, df, provider, status = try_openmeteo()
+    elif provider_pref == 'Open-Meteo':
+        url, df, provider, status = try_openmeteo()
+    else:  # Auto
+        url, df, provider, status = try_meteomatics()
+        if df is None or df.empty:
+            url, df, provider, status = try_openmeteo()
 
-                st.metric(label="📈 Indice variazione curva (integrale |Δ|)", value=f"{integral_diff:.2f} (kW·h)")
+    # --- Se nessun dato disponibile ---
+    if df is None or df.empty:
+        write_log(
+            timestamp=datetime.utcnow().isoformat(),
+            day_label=label,
+            provider=provider,
+            status=status,
+            url=url,
+            lat=lat,
+            lon=lon,
+            tilt=tilt,
+            orient=orient,
+            note='no data'
+        )
+        return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
-                # Alert box with user slider
-                threshold = st.slider("Soglia di allerta (kW·h)", 10.0, 500.0, 100.0, step=10.0)
-                if integral_diff > threshold:
-                    st.error(f"🚨 ATTENZIONE: variazione elevata – indice {integral_diff:.2f} > soglia {threshold:.2f}")
-                elif integral_diff > threshold * 0.5:
-                    st.warning(f"⚠️ Variazione moderata – indice {integral_diff:.2f}")
-                else:
-                    st.success(f"✅ Variazione contenuta – indice {integral_diff:.2f}")
-
-                # Comparison chart
-                chart_df = pd.DataFrame({
-                    "datetime": merged["datetime"],
-                    "Previsione corrente": merged["Produzione_stimata_kW_new"],
-                    "Curva 'Domani' salvata": merged["Produzione_stimata_kW_ref"]
-                }).set_index("datetime")
-                st.line_chart(chart_df)
-            except Exception as e:
-                write_log(f"Monitor error: {e}")
-                st.error(f"Errore monitoraggio variazioni: {e}")
-
-with tab4:
-    st.subheader("📤 Esporta")
-    st.caption("Scarica l'ultima previsione 'Domani' salvata")
+    # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive)
+    tz_status = "unknown"
     try:
-        import glob
-        files = sorted(glob.glob(os.path.join("logs/forecasts", "*_forecast_tomorrow.csv")))
-        if files:
-            last = files[-1]
-            df_last = pd.read_csv(last)
-            st.download_button("⬇️ Scarica CSV 'Domani' più recente", data=df_last.to_csv(index=False), file_name=os.path.basename(last), mime="text/csv")
-        else:
-            st.info("Nessun file salvato ancora.")
+        import pytz
+        tz_local = pytz.timezone("Europe/Rome")
+
+        # parsing robusto con gestione UTC
+        times = pd.to_datetime(df['time'], errors='coerce')
+
+        # se il risultato non ha info di fuso, assumiamo UTC
+        if times.dt.tz is None:
+            times = times.dt.tz_localize(pytz.UTC)
+
+        # converte in ora italiana
+        times = times.dt.tz_convert(tz_local)
+
+        # rimuove info di fuso per evitare shift nei grafici
+        df['time'] = times.dt.tz_localize(None)
+
+        # salva info fuso per log
+        tz_status = "UTC→Europe/Rome (naive per grafico)"
     except Exception as e:
-        write_log(f"Export error: {e}")
-        st.error(f"Errore export: {e}")
+        tz_status = f"error: {e}"
+        st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
+
+    # --- Calcolo curve e parametri ---
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+
+    # --- Log dettagliato con fuso orario rilevato ---
+    write_log(
+        timestamp=datetime.utcnow().isoformat(),
+        day_label=label,
+        provider=provider,
+        status=status,
+        url=url,
+        lat=lat,
+        lon=lon,
+        tilt=tilt,
+        orient=orient,
+        tz_status=tz_status,
+        sum_rad_corr=float(df2['rad_corr'].sum()),
+        pred_kwh=float(pred_kwh),
+        peak_kW=float(peak_kW),
+        cloud_mean=float(cloud_mean)
+    )
+
+    # --- Autosave opzionale ---
+    if autosave:
+        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
+        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
+        pd.DataFrame([{
+            'date': str(day),
+            'energy_kWh': float(pred_kwh),
+            'peak_kW': float(peak_kW),
+            'cloud_mean': float(cloud_mean)
+        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
+
+    # ✅ Conversione robusta UTC → Europe/Rome
+    try:
+        from zoneinfo import ZoneInfo
+        df['time'] = pd.to_datetime(df['time'])
+        if df['time'].dt.tz is None:
+        # Se non ha timezone, aggiungiamo UTC
+           df['time'] = df['time'].dt.tz_localize('UTC')
+    # In entrambi i casi, convertiamo in ora italiana
+        df['time'] = df['time'].dt.tz_convert('Europe/Rome')
+    except Exception as e:
+        st.warning(f"⚠️ Impossibile convertire timezone: {e}")
+
+
+    # --- Calcolo curve e parametri ---
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+
+    # --- Log ---
+    write_log(timestamp=datetime.utcnow().isoformat(), day_label=label, provider=provider, status=status, url=url,
+              lat=lat, lon=lon, tilt=tilt, orient=orient,
+              sum_rad_corr=float(df2['rad_corr'].sum()), pred_kwh=float(pred_kwh),
+              peak_kW=float(peak_kW), cloud_mean=float(cloud_mean))
+
+    # --- Autosave opzionale ---
+    if autosave:
+        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
+        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
+        pd.DataFrame([{
+            'date': str(day),
+            'energy_kWh': float(pred_kwh),
+            'peak_kW': float(peak_kW),
+            'cloud_mean': float(cloud_mean)
+        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
+
+# --------------- COMPARISON: FORECAST VS REAL ----------------- #
+from sklearn.metrics import mean_absolute_error
+def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
+    try: df_real = pd.read_csv(data_path, parse_dates=['Date'])
+    except Exception as e: st.warning(f'⚠️ Errore caricamento storico: {e}'); return None, None, None
+    if forecast_df is None or forecast_df.empty or 'time' not in forecast_df.columns: return None, None, None
+    f_date = pd.to_datetime(forecast_df['time'].iloc[0]).date()
+    df_real_day = df_real[df_real['Date'].dt.date == f_date]
+    if df_real_day.empty: st.info(f'Nessun dato reale per {f_date}'); return None, None, None
+    dfp = forecast_df.copy(); dfp['Potenza_kW_prevista'] = dfp['kWh_curve'] * 4
+    mae = float('nan'); mape = float('nan')
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=dfp['time'], y=dfp['Potenza_kW_prevista'], mode='lines', name='Previsione (kW)', line=dict(color='orange', width=2)))
+    if 'Potenza_reale_kW' in df_real_day.columns:
+        y_true = df_real_day['Potenza_reale_kW'].values[:len(dfp)]
+        y_pred = dfp['Potenza_kW_prevista'].values[:len(y_true)]
+        mae = float(mean_absolute_error(y_true, y_pred))
+        mape = float(np.mean(np.abs((y_true - y_pred)/np.maximum(y_true, 1e-3))) * 100)
+        fig.add_trace(go.Scatter(x=dfp['time'], y=y_true, mode='lines', name='Reale (kW)', line=dict(color='blue', width=2)))
+    fig.update_layout(title=f'📊 Confronto previsione vs reale – {day_label}', xaxis_title='Ora', yaxis_title='Potenza (kW)', template='plotly_white', height=350)
+    return fig, mae, mape
+
+# ----------------------------- UI ----------------------------- #
+st.title('☀️ Solar Forecast - ROBOTRONIX for IMEPOWER')
+for k,v in {'lat':DEFAULT_LAT,'lon':DEFAULT_LON,'tilt':DEFAULT_TILT,'orient':DEFAULT_ORIENT,'provider_pref':'Auto','plant_kw':DEFAULT_PLANT_KW}.items():
+    st.session_state.setdefault(k,v)
+tab1, tab2, tab3, tab4, tab5 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa','🛡️ Stabilità previsioni'])
+
+# ---- TAB 1: Storico ---- #
+with tab1:
+    try:
+        df = load_data()
+        st.subheader('Storico produzione (kWh) e irradianza (W/m²) — grafici separati')
+        c1,c2 = st.columns(2)
+        with c1:
+            fig1 = go.Figure(); fig1.add_trace(go.Scatter(x=df['Date'], y=df['E_INT_Daily_kWh'], mode='lines', name='Produzione (kWh)', line=dict(color='orange', width=2)))
+            fig1.update_layout(template='plotly_white', height=350, title='⚡ Produzione giornaliera (kWh)', xaxis_title='Data', yaxis_title='Energia (kWh)')
+            st.plotly_chart(fig1, use_container_width=True)
+        with c2:
+            fig2 = go.Figure(); fig2.add_trace(go.Scatter(x=df['Date'], y=df['G_M0_Wm2'], mode='lines', name='Irradianza (W/m²)', line=dict(color='deepskyblue', width=2)))
+            fig2.update_layout(template='plotly_white', height=350, title='☀️ Irradianza giornaliera (W/m²)', xaxis_title='Data', yaxis_title='W/m²')
+            st.plotly_chart(fig2, use_container_width=True)
+    except Exception as e: st.error(f'Errore caricamento storico: {e}')
+
+# ---- TAB 2: Modello ---- #
+with tab2:
+    st.subheader('🧠 Modello di previsione')
+    c1,c2,c3 = st.columns([1,1,2])
+    if c1.button('Addestra / Riaddestra modello', use_container_width=True):
+        mae,r2 = train_model(); st.session_state['last_mae']=mae; st.session_state['last_r2']=r2
+        st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
+    if os.path.exists(MODEL_PATH):
+        model = load_model(); dfm = load_data()
+        if 'E_INT_Daily_KWh' in dfm.columns and 'E_INT_Daily_kWh' not in dfm.columns: dfm = dfm.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
+        for col in ['CloudCover_P','Temp_Air']:
+            if col not in dfm.columns: dfm[col]=np.nan
+        dfm = dfm.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2'])
+        Xp = dfm[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(dfm[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
+        dfm['Predetto'] = model.predict(Xp)
+        fig = go.Figure(); fig.add_trace(go.Scatter(x=dfm['E_INT_Daily_kWh'], y=dfm['Predetto'], mode='markers', marker=dict(size=5, opacity=0.6), name='Punti'))
+        minv = float(min(dfm['E_INT_Daily_kWh'].min(), dfm['Predetto'].min())); maxv = float(max(dfm['E_INT_Daily_kWh'].max(), dfm['Predetto'].max()))
+        fig.add_trace(go.Scatter(x=[minv,maxv], y=[minv,maxv], mode='lines', line=dict(color='orange', dash='dash'), name='y = x'))
+        fig.update_layout(title='📈 Reale vs Predetto (kWh/giorno)', xaxis_title='Reale (kWh)', yaxis_title='Predetto (kWh)', template='plotly_white', height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        fi_path = os.path.join(LOG_DIR, 'feature_importances.csv')
+        if os.path.exists(fi_path):
+            feat = pd.read_csv(fi_path, index_col=0);
+            if feat.shape[1]==1: feat.columns=['importance']
+            figf = go.Figure(); figf.add_trace(go.Bar(x=feat.index, y=feat.iloc[:,0]))
+            figf.update_layout(title='🔍 Importanza variabili', xaxis_title='Feature', yaxis_title='Importanza', template='plotly_white', height=350)
+            st.plotly_chart(figf, use_container_width=True)
+    else: st.info('Addestra il modello per abilitare le previsioni.')
+
+# ---- TAB 3: Previsioni (4 giorni) ---- #
+with tab3:
+    st.subheader('🔮 Previsioni (PT15M, tilt/orient, provider toggle)')
+
+    colA, colB, colC, colD = st.columns(4)
+    st.session_state['lat'] = colA.number_input('Lat', value=float(st.session_state['lat']), step=0.0001, format='%.6f')
+    st.session_state['lon'] = colB.number_input('Lon', value=float(st.session_state['lon']), step=0.0001, format='%.6f')
+    st.session_state['tilt'] = colC.number_input('Tilt (°)', value=float(st.session_state['tilt']), step=1.0)
+    st.session_state['orient'] = colD.number_input('Orient (°)', value=float(st.session_state['orient']), step=1.0)
+
+    colE, colF = st.columns(2)
+    st.session_state['provider_pref'] = colE.selectbox('Provider', ['Auto', 'Meteomatics', 'Open-Meteo'], index=0)
+    st.session_state['plant_kw'] = colF.number_input('Taglia impianto (kW)', value=float(st.session_state['plant_kw']), step=10.0)
+
+    model = load_model()
+    if model is None:
+        st.warning('⚠️ Modello non addestrato. Vai al tab "🧠 Modello".')
+    else:
+        if st.button('Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)'):
+            results = {}
+            for label, off in [('Ieri', -1), ('Oggi', 0), ('Domani', 1), ('Dopodomani', 2)]:
+                dfp, energy, peak_kW, peak_pct, cloud_mean, provider, status, url = forecast_for_day(
+                    lat=st.session_state['lat'], lon=st.session_state['lon'],
+                    offset_days=off, label=label, model=model,
+                    tilt=st.session_state['tilt'], orient=st.session_state['orient'],
+                    provider_pref=st.session_state['provider_pref'], plant_kw=st.session_state['plant_kw'],
+                    autosave=False
+                )
+                results[label] = dfp
+                st.markdown(f"### **{label}**")
+                st.caption(f"Provider: {provider} | Stato: {status}")
+                #st.code(url or '', language='text')
+
+                if dfp is not None and not dfp.empty:
+                    # --- ANTEPRIMA DATI GREZZI DEL PROVIDER ---
+                    with st.expander("📊 Meteomatics/Open-Meteo: anteprima dati grezzi"):
+                        try:
+                            fig_diag = go.Figure()
+                            fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['GlobalRad_W'], name='GlobalRad_W', mode='lines'))
+                            if 'CloudCover_P' in dfp.columns:
+                                fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['CloudCover_P'], name='CloudCover_P', mode='lines'))
+                            if 'Temp_Air' in dfp.columns:
+                                fig_diag.add_trace(go.Scatter(x=dfp['time'], y=dfp['Temp_Air'], name='Temp_Air', mode='lines'))
+                            fig_diag.update_layout(template='plotly_white', height=220, margin=dict(l=10, r=10, t=30, b=10))
+                            st.plotly_chart(fig_diag, use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Diagnostica non disponibile: {e}")
+
+                    # =====================================================================
+                    #  SEZIONE: Grafico previsioni + ora locale + debug allineamento
+                    # =====================================================================
+
+                    import plotly.graph_objects as go
+                    import pytz
+                    from datetime import datetime
+
+                    # 🕒 Mostra fuso orario e ora corrente
+                    try:
+                        tz_local = pytz.timezone("Europe/Rome")
+                        now_local = datetime.now(tz_local)
+                        today_local = now_local.strftime("%d/%m/%Y")
+                        hour_local = now_local.strftime("%H:%M:%S")
+
+                        st.markdown("### 🕒 Fuso orario e ora locale")
+                        st.info(
+                            f"**Fuso orario attivo:** Europe/Rome 🇮🇹  \n"
+                            f"**Data locale:** {today_local}  \n"
+                            f"**Ora locale corrente:** {hour_local}"
+                        )
+                    except Exception as e:
+                        st.warning(f"⚠️ Impossibile determinare l'ora locale: {e}")
+
+                    # --- CREA FIGURA ---
+                    fig = go.Figure()
+
+                    # ☀️ Curva irradianza
+                    if 'GlobalRad_W' in dfp.columns:
+                        fig.add_trace(go.Scatter(
+                            x=dfp['time'], y=dfp['GlobalRad_W'],
+                            mode='lines', name='☀️ Irradianza (W/m²)',
+                            line=dict(color='royalblue', width=2)
+                        ))
+
+                    # ⚡ Curva produzione stimata
+                    if 'kWh_curve' in dfp.columns:
+                        fig.add_trace(go.Scatter(
+                            x=dfp['time'], y=dfp['kWh_curve'],
+                            mode='lines', name='⚡ Produzione stimata (kW)',
+                            line=dict(color='orange', width=3)
+                        ))
+
+                    # --- Trova picchi e disegna linee ---
+                    try:
+                        idx_rad = dfp['GlobalRad_W'].idxmax() if 'GlobalRad_W' in dfp.columns else None
+                        idx_prod = dfp['kWh_curve'].idxmax() if 'kWh_curve' in dfp.columns else None
+
+                        t_rad, t_prod = None, None
+                        if idx_rad is not None:
+                            t_rad = dfp.loc[idx_rad, 'time']
+                            fig.add_vline(x=t_rad, line_width=2, line_dash='dash', line_color='royalblue')
+                            fig.add_annotation(
+                                x=t_rad, y=max(dfp['GlobalRad_W']),
+                                text=f"☀️ Picco irradianza {t_rad.strftime('%H:%M')}",
+                                showarrow=True, arrowhead=2, yshift=25, bgcolor='rgba(0,0,50,0.3)'
+                            )
+
+                        if idx_prod is not None:
+                            t_prod = dfp.loc[idx_prod, 'time']
+                            fig.add_vline(x=t_prod, line_width=2, line_dash='dot', line_color='orange')
+                            fig.add_annotation(
+                                x=t_prod, y=max(dfp['kWh_curve']),
+                                text=f"⚡ Picco produzione {t_prod.strftime('%H:%M')}",
+                                showarrow=True, arrowhead=2, yshift=25, bgcolor='rgba(50,0,0,0.3)'
+                            )
+
+                        if t_rad and t_prod:
+                            delta = abs((t_rad - t_prod).total_seconds()) / 60
+                            if delta <= 15:
+                                st.success(f"✅ Allineamento perfetto: picchi coincidenti ({t_rad.strftime('%H:%M')}).")
+                            else:
+                                st.warning(
+                                    f"⚠️ Differenza picchi: {delta:.0f} minuti "
+                                    f"(irradianza {t_rad.strftime('%H:%M')} vs produzione {t_prod.strftime('%H:%M')})."
+                                )
+                    except Exception as e:
+                        st.warning(f"⚠️ Errore nel calcolo dei picchi: {e}")
+
+                    # --- 🕒 Linea verticale dell'ora attuale ---
+                    try:
+                        tz_local = pytz.timezone("Europe/Rome")
+                        now_local = datetime.now(tz_local)
+                        now_local_naive = now_local.replace(tzinfo=None)
+
+                        if dfp['time'].min() <= now_local_naive <= dfp['time'].max():
+                            fig.add_vline(
+                                x=now_local_naive,
+                                line_width=2,
+                                line_dash="dot",
+                                line_color="red",
+                                annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                                annotation_position="top right",
+                                annotation_font_size=12,
+                                annotation_font_color="red"
+                            )
+                    except Exception as e:
+                        st.warning(f"⚠️ Errore nella linea dell'ora attuale: {e}")
+
+                    # --- Layout grafico ---
+                    fig.update_layout(
+                        title="☀️ Irradianza vs ⚡ Produzione stimata",
+                        xaxis_title="Ora locale (Europe/Rome)",
+                        yaxis_title="Potenza [W / kW]",
+                        template="plotly_white",
+                        hovermode="x unified",
+                        legend=dict(orientation="h", y=-0.25),
+                        margin=dict(t=80, b=40)
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # --- 🔧 SEZIONE DEBUG ---
+                    with st.expander("🔧 Debug: verifica allineamento orario (prime 20 righe)"):
+                        try:
+                            st.caption("Controlla i primi campioni per verificare tempi e valori:")
+                            st.dataframe(
+                                dfp[['time', 'GlobalRad_W', 'rad_corr', 'kWh_curve']].head(20),
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.warning(f"⚠️ Debug non disponibile: {e}")
+
+# ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
+with tab4:
+    st.subheader("🛰️ Localizzazione impianto fotovoltaico (vista satellitare)")
+    st.write("Visualizzazione satellitare ad alta risoluzione tramite Esri World Imagery.")
+
+    # Recupera coordinate correnti dalla sessione
+    lat = float(st.session_state.get('lat', DEFAULT_LAT))
+    lon = float(st.session_state.get('lon', DEFAULT_LON))
+
+    # Mostra coordinate testuali
+    st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
+
+    # Import Folium e Streamlit-Folium
+    from streamlit_folium import st_folium
+    import folium
+
+    # Crea la mappa satellitare
+    m = folium.Map(
+        location=[lat, lon],
+        zoom_start=17,
+        tiles='Esri.WorldImagery',  # layer satellitare ad alta risoluzione
+        attr='Tiles © Esri'
+    )
+
+    # Aggiungi marker dell’impianto
+    folium.Marker(
+        [lat, lon],
+        popup=f"Impianto fotovoltaico<br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
+        tooltip="Impianto fotovoltaico",
+        icon=folium.Icon(color='orange', icon='bolt', prefix='fa')
+    ).add_to(m)
+
+    # Mostra la mappa nella pagina Streamlit
+    st_folium(m, width=900, height=500)
+
+# ---- TAB 5: Stabilità previsioni ---- #
+# ---- TAB 5: Stabilità previsioni ---- #
+with tab5:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import random
+
+    st.subheader('🛡️ Monitoraggio stabilità delle previsioni (ogni 15 minuti)')
+    st.caption(
+        'Questo modulo controlla periodicamente se le previsioni meteo cambiano in modo '
+        'significativo, riducendo la produzione attesa. '
+        'In caso di variazioni oltre le soglie, viene segnalato un alert e può essere rifatta la simulazione.'
+    )
+
+    # --- Parametri configurazione ---
+    col1, col2, col3 = st.columns(3)
+    soglia_pct = col1.slider('Soglia calo energia (%)', 5, 80, 20, 1)
+    soglia_kwh = col2.number_input('Soglia calo energia (kWh)', 0.0, 1000.0, 50.0, 10.0)
+    email_rcpt = col3.text_input('Email per allerta (opzionale)', value='')
+
+    # --- Simulazione del controllo di stabilità ---
+    def check_forecast_stability(lat, lon, soglia_pct, soglia_kwh):
+        """Simula un controllo di stabilità, in futuro qui leggeremo dati reali dalle API."""
+        diff_pct = random.uniform(0, 50)
+        diff_kwh = random.uniform(0, 200)
+        return diff_pct, diff_kwh
+
+    # --- Notifica (placeholder) ---
+    def send_email_alert(email, subject, message):
+        if email:
+            st.info(f"📧 Email inviata a {email}: {subject}")
+        else:
+            st.info("📢 Notifica generata (email non impostata).")
+
+    # --- Esecuzione controllo ---
+    def run_stability_check(manual=False):
+        diff_pct, diff_kwh = check_forecast_stability(
+            st.session_state['lat'],
+            st.session_state['lon'],
+            soglia_pct,
+            soglia_kwh
+        )
+        now_local = datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y %H:%M:%S")
+
+        if diff_pct > soglia_pct or diff_kwh > soglia_kwh:
+            st.error(
+                f"⚠️ Le previsioni sono cambiate significativamente!\n\n"
+                f"Variazione: **{diff_pct:.1f}%** ({diff_kwh:.1f} kWh)  \n"
+                f"🕒 Ora: {now_local}"
+            )
+            send_email_alert(email_rcpt, "Allerta stabilità previsioni", f"Calo energia {diff_pct:.1f}% ({diff_kwh:.1f} kWh)")
+        else:
+            if manual:
+                st.success(f"✅ Nessuna variazione significativa ({diff_pct:.1f}% / {diff_kwh:.1f} kWh)  \n🕒 {now_local}")
+
+        st.session_state['last_check'] = now_local
+
+    # --- Controllo manuale ---
+    st.markdown("### 🔄 Controllo manuale")
+    st.caption("Premi per eseguire subito il controllo di stabilità previsioni.")
+    do_check = st.button('🔍 Controlla ora')
+
+    if do_check:
+        with st.spinner("🔍 Analisi in corso..."):
+            run_stability_check(manual=True)
+
+    # --- Controllo automatico ogni 15 minuti ---
+    st.markdown("### ⚙️ Controllo automatico")
+    st.caption("Il controllo viene eseguito ogni 15 minuti automaticamente in background.")
+    auto_check = st.checkbox("🕒 Attiva controllo automatico ogni 15 minuti", value=True)
+
+    if auto_check:
+        now_local = datetime.now(ZoneInfo("Europe/Rome"))
+        if 'last_auto_check' not in st.session_state:
+            st.session_state['last_auto_check'] = now_local
+
+        elapsed = (now_local - st.session_state['last_auto_check']).total_seconds() / 60
+        if elapsed >= 15:
+            with st.spinner("⏳ Controllo automatico in corso..."):
+                run_stability_check(manual=False)
+                st.session_state['last_auto_check'] = now_local
+                st.success(f"🕒 Controllo automatico eseguito alle {now_local.strftime('%H:%M:%S')}")
+
+    # --- Stato ultimo controllo ---
+    if 'last_check' in st.session_state:
+        st.caption(f"🕒 Ultimo controllo: {st.session_state['last_check']}")
