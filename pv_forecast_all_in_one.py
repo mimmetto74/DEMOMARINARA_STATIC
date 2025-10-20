@@ -14,6 +14,7 @@ try:
 except ImportError:
     import pickle as joblib
 
+from xgboost import XGBRegressor
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
