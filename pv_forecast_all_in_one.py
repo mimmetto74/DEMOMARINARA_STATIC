@@ -566,9 +566,11 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
 # ---- TAB 3: Previsioni (4 giorni) ---- #
+# ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('🔮 Previsioni 4 giorni (15 min)')
 
+    # --- Input parametri ---
     colA, colB, colC, colD = st.columns(4)
     st.session_state['lat'] = colA.number_input('Lat', value=float(st.session_state['lat']), step=0.0001, format='%.6f')
     st.session_state['lon'] = colB.number_input('Lon', value=float(st.session_state['lon']), step=0.0001, format='%.6f')
@@ -584,39 +586,52 @@ with tab3:
         st.warning('⚠️ Modello non addestrato. Vai al tab "🧠 Modello".')
     else:
         if st.button('Calcola previsioni (Ieri/Oggi/Domani/Dopodomani)', use_container_width=True):
-            results = {}
             for label, off in [('Ieri', -1), ('Oggi', 0), ('Domani', 1), ('Dopodomani', 2)]:
                 try:
                     dfp, energy, peak_kW, peak_pct, cloud_mean, provider, status, url = forecast_for_day(
                         lat=st.session_state['lat'], lon=st.session_state['lon'],
                         offset_days=off, label=label, model=model,
                         tilt=st.session_state['tilt'], orient=st.session_state['orient'],
-                        provider_pref=st.session_state['provider_pref'], plant_kw=st.session_state['plant_kw'],
+                        provider_pref=st.session_state['provider_pref'],
+                        plant_kw=st.session_state['plant_kw'],
                         autosave=False
                     )
                 except Exception as e:
                     st.error(f"Errore durante la previsione per {label}: {e}")
                     continue
 
-                st.markdown(f"### **{label}**")
-                st.caption(f"Provider: {provider} | Stato: {status}")
-
+                # --- Controllo dati ---
                 if dfp is None or dfp.empty:
                     st.warning(f"Nessun dato disponibile per {label}.")
                     continue
 
-                # --- Uniforma timezone e ordina ---
+                # --- Normalizza colonne temporali ---
                 import pytz
+                dfp = dfp.copy()
+                if 'time' not in dfp.columns:
+                    for alt in ['Date', 'datetime', 'timestamp']:
+                        if alt in dfp.columns:
+                            dfp.rename(columns={alt: 'time'}, inplace=True)
+                            break
+                if 'time' not in dfp.columns:
+                    st.error("❌ Colonna 'time' mancante nel dataset.")
+                    continue
+
                 dfp['time'] = pd.to_datetime(dfp['time'], errors='coerce')
                 dfp = dfp.dropna(subset=['time']).sort_values('time')
                 if dfp['time'].dt.tz is None:
                     dfp['time'] = dfp['time'].dt.tz_localize(pytz.UTC)
                 dfp['time'] = dfp['time'].dt.tz_convert("Europe/Rome").dt.tz_localize(None)
 
-                # --- Salva in sessione ---
-                st.session_state[f'forecast_{label.lower()}'] = dfp
+                # --- Applica metodo selezionato ---
+                if _method == "Fisico semplificato":
+                    dfp, energy, peak_kW, peak_pct, cloud_mean = forecast_physical(dfp, st.session_state['plant_kw'])
+                elif _method == "Ibrido ML + Fisico":
+                    dfp, energy, peak_kW, peak_pct, cloud_mean = forecast_hybrid(dfp, model, st.session_state['plant_kw'])
+                else:
+                    dfp, energy, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(dfp, model, st.session_state['plant_kw'])
 
-                # --- Salvataggio BASE per DOMANI ---
+                # --- Salvataggio base DOMANI ---
                 if label == 'Domani':
                     try:
                         base_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
@@ -626,23 +641,21 @@ with tab3:
                     except Exception as e:
                         st.warning(f"Impossibile salvare la base DOMANI: {e}")
 
-                # --- Grafico produzione e irradianza ---
+                # --- Grafico principale ---
                 import plotly.graph_objects as go
                 fig = go.Figure()
                 if 'GlobalRad_W' in dfp.columns:
                     fig.add_trace(go.Scatter(
                         x=dfp['time'], y=dfp['GlobalRad_W'],
-                        mode='lines', name='☀️ Irradianza (W/m²)',
-                        line=dict(color='royalblue', width=2)
+                        mode='lines', name='☀️ Irradianza (W/m²)', line=dict(color='royalblue', width=2)
                     ))
                 if 'kWh_curve' in dfp.columns:
                     fig.add_trace(go.Scatter(
                         x=dfp['time'], y=dfp['kWh_curve'],
-                        mode='lines', name='⚡ Produzione stimata (kW)',
-                        line=dict(color='orange', width=3)
+                        mode='lines', name='⚡ Produzione stimata (kW)', line=dict(color='orange', width=3)
                     ))
 
-                # --- Picchi irradiance / produzione ---
+                # --- Picchi e allineamento ---
                 try:
                     idx_rad = dfp['GlobalRad_W'].idxmax() if 'GlobalRad_W' in dfp.columns else None
                     idx_prod = dfp['kWh_curve'].idxmax() if 'kWh_curve' in dfp.columns else None
@@ -661,59 +674,37 @@ with tab3:
                 try:
                     now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
                     if dfp['time'].min() <= now_local <= dfp['time'].max():
-                        from datetime import datetime as dt
-                        now_timestamp = pd.Timestamp(now_local).to_pydatetime()
                         fig.add_vline(
-                            x=now_timestamp,
-                            line_width=2,
-                            line_dash='dot',
-                            line_color='red',
+                            x=pd.Timestamp(now_local).to_pydatetime(),
+                            line_width=2, line_dash='dot', line_color='red',
                             annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
                             annotation_position="top right"
                         )
                 except Exception as e:
                     st.warning(f"Errore linea oraria: {e}")
 
-                # --- Layout grafico ---
+                # --- Layout e risultati ---
                 fig.update_layout(
                     title=f"📊 Andamento previsto — {label}",
                     xaxis_title="Ora locale (Europe/Rome)",
                     yaxis_title="Potenza / Irradianza",
-                    template="plotly_white",
-                    height=400,
-                    hovermode="x unified"
+                    template="plotly_white", height=400, hovermode="x unified"
                 )
-                
-# ---- Applica metodo selezionato e salva base DOMANI ----
-if _method == "Fisico semplificato":
-    dfp, energy, peak_kW, peak_pct, cloud_mean = forecast_physical(dfp if 'dfp' in locals() else df, st.session_state.get('plant_kw', 1000))
-elif _method == "Ibrido ML + Fisico":
-    dfp, energy, peak_kW, peak_pct, cloud_mean = forecast_hybrid(dfp if 'dfp' in locals() else df, model, st.session_state.get('plant_kw', 1000))
-else:
-    dfp, energy, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(dfp if 'dfp' in locals() else df, model, st.session_state.get('plant_kw', 1000))
+                st.markdown(f"### **{label}**")
+                st.caption(f"Provider: {provider} | Stato: {status} | Energia: {energy:.1f} kWh | Picco: {peak_kW:.1f} kW ({peak_pct:.1f}%)")
+                st.plotly_chart(fig, use_container_width=True)
 
-if label == "Domani" and dfp is not None and not dfp.empty:
-    base_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
-    cols = [c for c in ['time','GlobalRad_W','CloudCover_P','Temp_Air','kWh_curve'] if c in dfp.columns]
-    try:
-        dfp[cols].to_csv(base_path, index=False)
-        st.info(f"📦 Base DOMANI ({_method}) salvata: {base_path}")
-    except Exception as e:
-        st.warning(f"Impossibile salvare la base DOMANI: {e}")
-st.plotly_chart(fig, use_container_width=True)
+                # --- Download CSV ---
+                csv_data = dfp.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label=f"📥 Scarica CSV previsione {label}",
+                    data=csv_data,
+                    file_name=f"previsione_{label.lower()}.csv",
+                    mime="text/csv",
+                    key=f"download_{label.lower()}",
+                    use_container_width=True
+                )
 
-# --- Download CSV ---
-csv_data = dfp.to_csv(index=False).encode('utf-8')
-st.download_button(
-    label=f"📥 Scarica CSV previsione {label}",
-    data=csv_data,
-    file_name=f"previsione_{label.lower()}.csv",
-    mime="text/csv",
-    key=f"download_{label.lower()}",
-    use_container_width=True
-)
-
-st.divider()
 # ============================================================
 # ⚙️ Metodo fisico semplificato
 # ============================================================
