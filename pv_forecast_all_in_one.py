@@ -256,16 +256,7 @@ def compute_curve_and_daily(df, model, plant_kw):
     # --- Validazione iniziale ---
     if df is None or df.empty:
         return df, 0.0, 0.0, 0.0, 0.0
-    # --- Uniforma il nome della colonna temporale ---
-    if 'time' not in df.columns:
-        # Rinomina automaticamente se trova 'Date' o simili
-        for alt in ['Date', 'datetime', 'timestamp', 'validdate']:
-            if alt in df.columns:
-                df.rename(columns={alt: 'time'}, inplace=True)
-                break
-        else:
-            st.error("❌ Nessuna colonna temporale trovata nel dataset (serve 'time').")
-            return df, 0, 0, 0, 0
+
     # --- Parsing e ordinamento ---
     df['time'] = pd.to_datetime(df['time'], errors='coerce')
     df = df.dropna(subset=['time']).sort_values('time')
