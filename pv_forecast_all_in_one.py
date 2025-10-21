@@ -714,6 +714,42 @@ st.download_button(
 )
 
 st.divider()
+# ============================================================
+# ⚙️ Metodo fisico semplificato
+# ============================================================
+def forecast_physical(df, plant_kw, eff=0.17):
+    if df is None or df.empty:
+        return df, 0, 0, 0, 0
+    df = df.copy()
+    if 'GlobalRad_W' not in df.columns:
+        st.warning("⚠️ Colonna 'GlobalRad_W' mancante nei dati meteo.")
+        return df, 0, 0, 0, 0
+    df['Energy_kWh'] = df['GlobalRad_W'] * eff * (15 * 60) / 3.6e6 * (plant_kw / 1000)
+    df['kWh_curve'] = df['Energy_kWh'] / (15 / 60)
+    total = float(df['Energy_kWh'].sum())
+    peak_kW = float(df['kWh_curve'].max())
+    peak_pct = float(100 * peak_kW / plant_kw)
+    cloud_mean = float(df['CloudCover_P'].mean()) if 'CloudCover_P' in df.columns else 0.0
+    return df, total, peak_kW, peak_pct, cloud_mean
+
+
+# ============================================================
+# 🌦️ Metodo ibrido (ML + fisico)
+# ============================================================
+def forecast_hybrid(df, model, plant_kw, w_ml=0.7):
+    if df is None or df.empty:
+        return df, 0, 0, 0, 0
+    df_ml, _, _, _, cloud = compute_curve_and_daily(df, model, plant_kw)
+    df_phys, _, _, _, _ = forecast_physical(df, plant_kw)
+    if df_ml.empty or df_phys.empty:
+        return df, 0, 0, 0, 0
+    n = min(len(df_ml), len(df_phys))
+    df_h = df_ml.iloc[:n].copy()
+    df_h['kWh_curve'] = w_ml * df_ml['kWh_curve'].iloc[:n] + (1 - w_ml) * df_phys['kWh_curve'].iloc[:n]
+    total = float(df_h['kWh_curve'].sum() * (15 / 60))
+    peak = float(df_h['kWh_curve'].max())
+    peak_pct = float(100 * peak / plant_kw)
+    return df_h, total, peak, peak_pct, cloud
 
 # ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
 with tab4:
