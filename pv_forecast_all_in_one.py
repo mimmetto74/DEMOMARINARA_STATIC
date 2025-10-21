@@ -198,72 +198,68 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
-# ----------------------- MACHINE LEARNING ENHANCED TRAINING ----------------------- #
-from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score
-import numpy as np, pandas as pd
-
-def prepare_training_data(df):
-    from math import pi
-    df['hour'] = df['Date'].dt.hour + df['Date'].dt.minute / 60.0
-    df['dayofyear'] = df['Date'].dt.dayofyear
-    df['hour_sin'] = np.sin(2 * pi * df['hour'] / 24)
-    df['hour_cos'] = np.cos(2 * pi * df['hour'] / 24)
-    df['doy_sin'] = np.sin(2 * pi * df['dayofyear'] / 365)
-    df['doy_cos'] = np.cos(2 * pi * df['dayofyear'] / 365)
-    df = df.rename(columns={'G_M0_Wm2': 'GlobalRad_W'})
-    for c in ['GlobalRad_W','CloudCover_P','Temp_Air','E_INT_Daily_kWh']:
-        if c not in df.columns:
-            df[c] = 0.0
-    return df.dropna(subset=['GlobalRad_W','E_INT_Daily_kWh'])
-
 def train_model():
     df0 = load_data()
-    df = prepare_training_data(df0)
-    X = df[['GlobalRad_W','CloudCover_P','Temp_Air','hour_sin','hour_cos','doy_sin','doy_cos']]
+    if 'E_INT_Daily_KWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
+        df0 = df0.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
+    for col in ['CloudCover_P','Temp_Air']:
+        if col not in df0.columns: df0[col] = np.nan
+    df = df0.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2']).copy()
+    X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
     y = df['E_INT_Daily_kWh']
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = HistGradientBoostingRegressor(max_depth=8, learning_rate=0.05, n_estimators=400, random_state=42)
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
+    model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
     model.fit(Xtr, ytr)
     pred = model.predict(Xte)
     mae = float(mean_absolute_error(yte, pred))
     r2 = float(r2_score(yte, pred))
     joblib.dump({'model': model, 'features': X.columns.tolist()}, MODEL_PATH)
-    pd.Series(model.feature_names_in_).to_csv(os.path.join(LOG_DIR,'feature_importances_hybrid.csv'), index=False)
+    pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(LOG_DIR,'feature_importances.csv'))
     return mae, r2
 
 # ------------------- DAILY CURVE & FORECAST ------------------- #
 
-# -*- coding: utf-8 -*-
-# --- Estratto aggiornato per funzione ibrida fisica + ML ---
-
 def compute_curve_and_daily(df, model, plant_kw):
+    """
+    Calcola la curva di produzione stimata a partire dai dati meteo.
+    Funzionalità:
+      - Conversione automatica del tempo in Europe/Rome
+      - Mantiene i dati grezzi per diagnostica
+      - Allineamento temporale corretto (nessuno shift)
+      - Compatibilità completa con Meteomatics / Open-Meteo
+      - Normalizzazione per potenza impianto
+    """
     import numpy as np
     import pandas as pd
     import pytz
-    import streamlit as st
 
+    # --- Validazione iniziale ---
     if df is None or df.empty:
         return df, 0.0, 0.0, 0.0, 0.0
 
+    # --- Parsing e ordinamento ---
     df['time'] = pd.to_datetime(df['time'], errors='coerce')
     df = df.dropna(subset=['time']).sort_values('time')
 
+    # ✅ Conversione automatica in ora locale
     try:
         tz_local = pytz.timezone("Europe/Rome")
+        # Se il timestamp non ha timezone, assumiamo UTC
         if df['time'].dt.tz is None:
             df['time'] = df['time'].dt.tz_localize(pytz.UTC)
         df['time'] = df['time'].dt.tz_convert(tz_local).dt.tz_localize(None)
     except Exception as e:
         st.warning(f"⚠️ Errore conversione fuso orario: {e}")
 
-    # --- Conversione robusta colonne numeriche ---
+    # --- Conversione robusta di colonne numeriche ---
     for col in df.columns:
         if col != 'time':
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            try:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            except Exception:
+                pass
 
-    # --- Irradianza corretta ---
+    # --- Calcolo irradianza corretta (mantiene dati grezzi) ---
     if 'GlobalRad_W' in df.columns:
         df['rad_corr'] = df['GlobalRad_W'].fillna(0)
     elif 'G_M0_Wm2' in df.columns:
@@ -273,53 +269,52 @@ def compute_curve_and_daily(df, model, plant_kw):
         df['rad_corr'] = 0.0
         st.warning("⚠️ Nessuna colonna di irradianza trovata nei dati meteo.")
 
+    # --- Resample ogni 15 minuti (preserva media delle numeriche) ---
     df = df.set_index('time').resample('15T').mean(numeric_only=True).reset_index()
 
-    # --- Parametri fisici ---
-    eta_ref = 0.18
-    gamma_pdc = -0.004
-    noct = 45.0
-    inv_eff = 0.97
-    dc_ac_ratio = 1.15
-
-    rad = df['GlobalRad_W'].fillna(df.get('rad_corr', 0.0))
-    ta = df.get('Temp_Air', pd.Series([25.0]*len(df), index=df.index)).astype(float)
-    cc = df.get('CloudCover_P', pd.Series([50.0]*len(df), index=df.index)).astype(float)
-
-    # --- Modello fisico base ---
-    t_cell = ta + (noct - 20.0)/800.0 * rad
-    cloud_factor = (1.0 - 0.30 * (cc/100.0)**1.5).clip(0.5, 1.0)
-
-    pdc_per_kwp = (rad/1000.0) * eta_ref * (1.0 + gamma_pdc*(t_cell - 25.0))
-    pdc_per_kwp = pdc_per_kwp.clip(lower=0.0)
-    pdc_kw = pdc_per_kwp * (plant_kw * dc_ac_ratio) * cloud_factor
-    pac_base = (pdc_kw * inv_eff).clip(upper=plant_kw)
-
-    # --- Modello ML per correzione ibrida ---
+    # --- Predizione modello se disponibile ---
     if model is not None:
+        model_features = getattr(model, "feature_names_in_", [])
+        X = pd.DataFrame()
+
+        # Mappa automatica dei nomi delle feature
+        col_map = {
+            'G_M0_Wm2': 'GlobalRad_W',
+            'GlobalRad_W': 'G_M0_Wm2'
+        }
+
+        for feat in model_features:
+            if feat in df.columns:
+                X[feat] = df[feat]
+            elif feat in col_map and col_map[feat] in df.columns:
+                X[feat] = df[col_map[feat]]
+            else:
+                X[feat] = 0.0
+
         try:
-            model_features = getattr(model, 'feature_names_in_', ['G_M0_Wm2', 'CloudCover_P', 'Temp_Air'])
-            X = pd.DataFrame()
-            for feat in model_features:
-                if feat in df.columns:
-                    X[feat] = df[feat]
-                elif feat == 'G_M0_Wm2' and 'GlobalRad_W' in df.columns:
-                    X[feat] = df['GlobalRad_W']
-                else:
-                    X[feat] = 0.0
+            df['kWh_curve'] = model.predict(X)
+        except ValueError as e:
+            st.warning(f"⚠️ Mismatch colonne modello: {e}. Riprovo adattando i nomi.")
+            cols = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else X.columns
+            X = X.reindex(columns=cols, fill_value=0)
+            df['kWh_curve'] = model.predict(X)
 
-            delta_pred = model.predict(X)
-            df['kWh_curve'] = (pac_base * (1.0 + delta_pred / plant_kw)).clip(lower=0, upper=plant_kw)
-        except Exception as e:
-            st.warning(f"⚠️ Errore correzione ML: {e}, uso solo fisica.")
-            df['kWh_curve'] = pac_base
+        # Normalizza rispetto alla potenza impianto
+        if df['kWh_curve'].max() > 0:
+            df['kWh_curve'] = (
+                df['kWh_curve'] / df['kWh_curve'].max()
+            ) * plant_kw
     else:
-        df['kWh_curve'] = pac_base
+        # --- Fallback proporzionale all'irradianza ---
+        ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'rad_corr'
+        max_val = max(df[ref_col].max(), 1)
+        df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max_val
 
-    # --- Smussamento e metriche ---
-    df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).median()
+    # --- Smussamento centrato (no shift temporale) ---
+    df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
 
-    pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)
+    # --- Metriche giornaliere ---
+    pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)  # ogni passo = 15 min
     peak_kW = df['kWh_curve'].max()
     peak_pct = 100 * peak_kW / plant_kw if plant_kw > 0 else np.nan
     cloud_mean = df['CloudCover_P'].mean() if 'CloudCover_P' in df.columns else np.nan
@@ -528,21 +523,21 @@ with tab2:
     )
 
     if uploaded_files:
-    df_base = load_data()
-    dfs = [df_base]
-    for f in uploaded_files:
-        try:
-            df_new = pd.read_csv(f, parse_dates=['Date'])
-            dfs.append(df_new)
-            st.success(f"✅ File aggiunto: {f.name} ({len(df_new)} righe)")
-        except Exception as e:
-            st.error(f"Errore caricamento {f.name}: {e}")
+        df_base = load_data()
+        dfs = [df_base]
+        for f in uploaded_files:
+            try:
+                df_new = pd.read_csv(f, parse_dates=['Date'])
+                dfs.append(df_new)
+                st.success(f"✅ File aggiunto: {f.name} ({len(df_new)} righe)")
+            except Exception as e:
+                st.error(f"Errore caricamento {f.name}: {e}")
 
-    df_merged = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['Date'])
-    merged_path = os.path.join(LOG_DIR, 'merged_dataset.csv')
-    df_merged.to_csv(merged_path, index=False)
-    st.info(f"📊 Dataset unificato salvato in: `{merged_path}` — {len(df_merged)} righe totali.")
-    st.session_state['custom_dataset'] = merged_path
+        df_merged = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['Date'])
+        merged_path = os.path.join(LOG_DIR, 'merged_dataset.csv')
+        df_merged.to_csv(merged_path, index=False)
+        st.info(f"📊 Dataset unificato salvato in: `{merged_path}` — {len(df_merged)} righe totali.")
+        st.session_state['custom_dataset'] = merged_path
 
     # --- Pulsante di addestramento ---
     c1, c2, c3 = st.columns([1, 1, 2])
@@ -677,37 +672,24 @@ with tab3:
                     st.warning(f"Errore calcolo picchi: {e}")
 
                
-               # --- Linea ora attuale (fix compatibilità Plotly) ---
-               try:
-                    import pandas as pd
-                    import pytz
-                    now_local = pd.Timestamp.now(pytz.timezone("Europe/Rome")).to_pydatetime()
-
+                # --- Linea ora attuale (final fix) ---
+                try:
+                    now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
                     if dfp['time'].min() <= now_local <= dfp['time'].max():
-                      fig.add_shape(
-                        type="line",
-                        x0=now_local,
-                        x1=now_local,
-                        y0=0,
-                        y1=1,
-                        xref="x",
-                        yref="paper",
-                        line=dict(color="red", width=2, dash="dot")
-                      )
-                      fig.add_annotation(
-                        x=now_local,
-                        y=1,
-                        xref="x",
-                        yref="paper",
-                        text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                        showarrow=False,
-                        xanchor="left",
-                        yanchor="bottom",
-                        font=dict(color="red")
-                      )
-                except Exception as e:
-                    st.warning(f"Errore linea oraria (fix compatibilità): {e}")
+                        # Converte il datetime in oggetto timestamp (numerico) per Plotly
+                        from datetime import datetime as dt
+                        now_timestamp = pd.Timestamp(now_local).to_pydatetime()
 
+                        fig.add_vline(
+                            x=now_timestamp,
+                            line_width=2,
+                            line_dash='dot',
+                            line_color='red',
+                            annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                            annotation_position="top right"
+                    )
+                except Exception as e:
+                   st.warning(f"Errore linea oraria (final fix): {e}")
 
                 # --- Layout grafico ---
                 fig.update_layout(
@@ -734,7 +716,6 @@ with tab3:
                 st.divider()
 
 # ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
-# ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
 with tab4:
     st.subheader("🛰️ Localizzazione impianto fotovoltaico (vista satellitare)")
     st.write("Visualizzazione satellitare ad alta risoluzione tramite Esri World Imagery.")
@@ -746,39 +727,30 @@ with tab4:
     # Mostra coordinate testuali
     st.markdown(f"**Coordinate attuali:** 🌍 {lat:.6f}, {lon:.6f}")
 
-    # ✅ Gestione sicura dell'import (evita crash se manca il modulo)
-    try:
-        from streamlit_folium import st_folium
-        import folium
+    # Import Folium e Streamlit-Folium
+    from streamlit_folium import st_folium
+    import folium
 
-        # Crea la mappa satellitare
-        m = folium.Map(
-            location=[lat, lon],
-            zoom_start=17,
-            tiles='Esri.WorldImagery',  # layer satellitare ad alta risoluzione
-            attr='Tiles © Esri'
-        )
+    # Crea la mappa satellitare
+    m = folium.Map(
+        location=[lat, lon],
+        zoom_start=17,
+        tiles='Esri.WorldImagery',  # layer satellitare ad alta risoluzione
+        attr='Tiles © Esri'
+    )
 
-        # Aggiungi marker dell’impianto
-        folium.Marker(
-            [lat, lon],
-            popup=f"Impianto fotovoltaico<br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
-            tooltip="Impianto fotovoltaico",
-            icon=folium.Icon(color='orange', icon='bolt', prefix='fa')
-        ).add_to(m)
+    # Aggiungi marker dell’impianto
+    folium.Marker(
+        [lat, lon],
+        popup=f"Impianto fotovoltaico<br>Lat: {lat:.6f}<br>Lon: {lon:.6f}",
+        tooltip="Impianto fotovoltaico",
+        icon=folium.Icon(color='orange', icon='bolt', prefix='fa')
+    ).add_to(m)
 
-        # Mostra la mappa nella pagina Streamlit
-        st_folium(m, width=900, height=500)
+    # Mostra la mappa nella pagina Streamlit
+    st_folium(m, width=900, height=500)
 
-    except ModuleNotFoundError:
-        st.warning(
-            "⚠️ Modulo **streamlit_folium** non installato.\n\n"
-            "Per visualizzare la mappa, installa il pacchetto eseguendo:\n\n"
-            "`pip install streamlit-folium`"
-        )
-    except Exception as e:
-        st.error(f"❌ Errore nella visualizzazione mappa: {e}")
-
+# ---- TAB 5: Stabilità previsioni ---- #
 # ---- TAB 5: Stabilità previsioni ---- #
 with tab5:
     from datetime import datetime
