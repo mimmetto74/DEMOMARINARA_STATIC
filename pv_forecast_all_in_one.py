@@ -321,6 +321,53 @@ def compute_curve_and_daily(df, model, plant_kw):
 
     return df, float(pred_kwh), float(peak_kW), float(peak_pct), float(cloud_mean)
 
+# ============================================================
+# 🔮  METODI DI PREVISIONE AGGIUNTIVI (plug-and-play)
+# ============================================================
+
+def forecast_physical(df, plant_kw, eff=0.17):
+    """
+    Metodo fisico semplificato:
+    stima la produzione kWh solo da irradianza e efficienza media del campo FV.
+    """
+    import numpy as np, pandas as pd
+    if df is None or df.empty or 'GlobalRad_W' not in df.columns:
+        return df, 0, 0, 0, 0
+    df = df.copy()
+
+    # Conversione W/m² → kWh (ogni 15 min)
+    df['Energy_kWh'] = df['GlobalRad_W'].fillna(0) * eff * (15 * 60) / 3.6e6 * (plant_kw / 1000)
+    df['kWh_curve'] = df['Energy_kWh'] / (15 / 60)
+
+    total_kWh = df['Energy_kWh'].sum()
+    peak_kW = df['kWh_curve'].max()
+    peak_pct = 100 * peak_kW / plant_kw
+    cloud_mean = df['CloudCover_P'].mean() if 'CloudCover_P' in df.columns else np.nan
+    return df, float(total_kWh), float(peak_kW), float(peak_pct), float(cloud_mean)
+
+
+def forecast_hybrid(df, model, plant_kw, w_ml=0.7):
+    """
+    Metodo ibrido: combina modello ML e modello fisico
+    (pesi: 70% ML + 30% fisico di default).
+    """
+    if df is None or df.empty:
+        return df, 0, 0, 0, 0
+    df_ml, k_ml, pk_ml, pct_ml, cloud = compute_curve_and_daily(df, model, plant_kw)
+    df_phys, k_phys, pk_phys, pct_phys, _ = forecast_physical(df, plant_kw)
+    if df_ml is None or df_phys is None or df_ml.empty:
+        return df, 0, 0, 0, 0
+
+    df_h = df_ml.copy()
+    common_len = min(len(df_ml), len(df_phys))
+    df_h = df_h.iloc[:common_len].copy()
+    df_h['kWh_curve'] = w_ml * df_ml['kWh_curve'].iloc[:common_len].values + \
+                        (1 - w_ml) * df_phys['kWh_curve'].iloc[:common_len].values
+
+    total = df_h['kWh_curve'].sum() * (15 / 60)
+    peak_kW = df_h['kWh_curve'].max()
+    peak_pct = 100 * peak_kW / plant_kw
+    return df_h, float(total), float(peak_kW), float(peak_pct), float(cloud)
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
     """Genera la previsione per un giorno specifico (ieri/oggi/domani...)"""
