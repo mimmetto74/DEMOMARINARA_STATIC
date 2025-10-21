@@ -702,18 +702,18 @@ if label == "Domani" and dfp is not None and not dfp.empty:
         st.warning(f"Impossibile salvare la base DOMANI: {e}")
 st.plotly_chart(fig, use_container_width=True)
 
-                # --- Download CSV ---
-                csv_data = dfp.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label=f"📥 Scarica CSV previsione {label}",
-                    data=csv_data,
-                    file_name=f"previsione_{label.lower()}.csv",
-                    mime="text/csv",
-                    key=f"download_{label.lower()}",
-                    use_container_width=True
-                )
+# --- Download CSV ---
+csv_data = dfp.to_csv(index=False).encode('utf-8')
+st.download_button(
+    label=f"📥 Scarica CSV previsione {label}",
+    data=csv_data,
+    file_name=f"previsione_{label.lower()}.csv",
+    mime="text/csv",
+    key=f"download_{label.lower()}",
+    use_container_width=True
+)
 
-                st.divider()
+st.divider()
 
 # ---- TAB 4: Mappa satellitare (Folium, senza chiavi API) ---- #
 with tab4:
