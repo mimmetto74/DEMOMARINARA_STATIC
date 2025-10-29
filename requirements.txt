@@ -1,18 +1,10 @@
-# Core dependencies
-streamlit-folium>=0.20.0
-streamlit==1.39.0
-pandas>=2.1.0
-numpy>=1.26.0
-plotly>=5.24.0
-requests>=2.32.0
-
-# Machine Learning
-scikit-learn>=1.5.0
-joblib>=1.3.0
-
-# Modelli opzionali
-xgboost>=2.1.0
-tensorflow==2.17.0
-
-# Ambiente cloud-safe
-protobuf>=4.25.0
+streamlit>=1.36
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+joblib>=1.3
+requests>=2.31
+altair>=5.0
+matplotlib>=3.8
+folium>=0.15
+streamlit-folium>=0.18
