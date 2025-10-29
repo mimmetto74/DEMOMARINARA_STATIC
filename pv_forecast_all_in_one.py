@@ -45,18 +45,26 @@ APP_PASS = os.environ.get('APP_PASS', 'robotronix')
 import pytz
 from dateutil import tz
 
-def fix_timezone(df, column='Date', tz_local='Europe/Rome'):
-    \"\"\"Allinea il timestamp all'ora locale italiana (Europe/Rome).\"\"\"
+def fix_timezone(df, column="Date", tz_local="Europe/Rome"):
+    """
+    Allinea il timestamp all'ora locale italiana (Europe/Rome).
+    - Se il dataset è in UTC, lo converte a Europe/Rome.
+    - Se è già locale, lo mantiene coerente.
+    """
     if column not in df.columns:
         return df
-    df[column] = pd.to_datetime(df[column], errors='coerce')
+
+    df[column] = pd.to_datetime(df[column], errors="coerce")
+
     try:
+        # Se la colonna non ha timezone (tipico dei CSV locali)
         if df[column].dt.tz is None:
-            df[column] = df[column].dt.tz_localize('UTC').dt.tz_convert(tz_local)
+            df[column] = df[column].dt.tz_localize("UTC").dt.tz_convert(tz_local)
         else:
             df[column] = df[column].dt.tz_convert(tz_local)
     except Exception as e:
-        print(f'[WARN] Timezone conversion failed for {column}:', e)
+        print(f"[WARN] Timezone conversion failed for {column}: {e}")
+
     return df
 
 def write_log(**kwargs):
