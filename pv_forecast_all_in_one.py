@@ -792,20 +792,71 @@ with tab5:
         st.warning("⚠️ Nessuna previsione trovata. Prima salva la previsione di domani dal Tab 3.")
     else:
         try:
-            # --- Legge file reale ---
-            if uploaded_file.name.endswith(".csv"):
-                df_real = pd.read_csv(uploaded_file)
+        # --- Legge file reale (robusto per CSV con ; e virgola decimale) ---
+        def _read_real_file(uploaded_file):
+            name = uploaded_file.name.lower()
+
+            # 1) Excel diretto
+            if name.endswith((".xls", ".xlsx")):
+                df = pd.read_excel(uploaded_file)
             else:
-                df_real = pd.read_excel(uploaded_file)
+                # 2) CSV – proviamo vari separator/decimal
+                tried = [
+                    dict(sep=None, engine="python"),      # auto-detect
+                    dict(sep=";", decimal=","),           # classico EU
+                    dict(sep=";", decimal="."),           # ; con punto decimale
+                    dict(sep=",", decimal=","),           # , con virgola decimale
+                    dict(sep=",", decimal=".")            # CSV classico
+                ]
+                last_err = None
+                for opts in tried:
+                    try:
+                        uploaded_file.seek(0)
+                        df = pd.read_csv(
+                            uploaded_file,
+                            **opts,
+                            skip_blank_lines=True,
+                            comment="#"
+                        )
+                        break
+                    except Exception as e:
+                        last_err = e
+                        continue
+                else:
+                    raise last_err
 
-            # Normalizza nomi colonne (usa 'meteorologica' come reale kW)
-            df_real.columns = [c.strip().lower() for c in df_real.columns]
-            if "meteorologica" not in df_real.columns:
-                st.error("❌ Colonna 'meteorologica' non trovata nel file reale.")
-                st.stop()
+            # 3) Normalizza nomi colonne
+            df.columns = [c.strip().lower() for c in df.columns]
 
-            df_real = df_real.rename(columns={"meteorologica": "Reale_kW"})
-            df_real = df_real.dropna(subset=["Reale_kW"]).reset_index(drop=True)
+            # 4) Se è una sola colonna “grezza”, prova a splittare
+            if df.shape[1] == 1 and df.iloc[:, 0].dtype == object:
+                s = df.iloc[:, 0].astype(str)
+                df = s.str.replace("\t", ";", regex=False).str.split(r"[;,]", expand=True)
+                df.columns = [f"col{i}" for i in range(df.shape[1])]
+
+            # 5) Scegli la colonna reale in kW
+            if "meteorologica" in df.columns:
+                serie = df["meteorologica"].astype(str)
+            else:
+                num_cols = []
+                for c in df.columns:
+                    vals = pd.to_numeric(df[c], errors="coerce")
+                    if vals.notna().sum() > 0:
+                        num_cols.append(c)
+                if not num_cols:
+                    raise ValueError("Nessuna colonna numerica trovata nel file reale.")
+                serie = df[num_cols[0]].astype(str)
+
+            # 6) Pulisci numeri: rimuovi separatore migliaia e usa punto decimale
+            serie = (serie.str.replace(".", "", regex=False)
+                           .str.replace(",", ".", regex=False))
+            serie = pd.to_numeric(serie, errors="coerce")
+
+            out = pd.DataFrame({"Reale_kW": serie})
+            out = out.dropna(subset=["Reale_kW"]).reset_index(drop=True)
+            return out
+
+        df_real = _read_real_file(uploaded_file)
 
             # --- Legge previsione salvata ---
             df_fore = pd.read_csv(forecast_path)
