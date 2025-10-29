@@ -676,11 +676,21 @@ with tab3:
 
                 # --- Linea ora attuale ---
                 try:
+                    import pandas as pd
+                    import pytz
+                    from datetime import datetime
+
                     now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
+
+                    # Assicuriamoci che la colonna 'time' sia datetime puro
+                    dfp['time'] = pd.to_datetime(dfp['time'], errors='coerce')
+
                     if dfp['time'].min() <= now_local <= dfp['time'].max():
                         fig.add_vline(
-                            x=pd.Timestamp(now_local).to_pydatetime(),
-                            line_width=2, line_dash='dot', line_color='red',
+                            x=now_local,
+                            line_width=2,
+                            line_dash="dot",
+                            line_color="red",
                             annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
                             annotation_position="top right"
                         )
