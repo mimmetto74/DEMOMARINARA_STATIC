@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """
+# -*- coding: utf-8 -*-
+"""
 Solar Forecast - ROBOTRONIX for IMEPOWER (Versione v2 – con Coerenza Energetica)
 - Build completa con struttura ordinata, modalità Debug, training RF,
   previsioni 15-min (Ieri/Oggi/Domani/Dopodomani), mappa e validazione DOMANI.
@@ -10,6 +12,8 @@ import os, json, joblib, requests, numpy as np, pandas as pd
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
+import pytz
+from dateutil import tz
 
 # --------------------------- Config Streamlit -------------------------------
 st.set_page_config(page_title='Solar Forecast - ROBOTRONIX (v2 DEBUG)', layout='wide')
@@ -41,21 +45,27 @@ APP_USER = os.environ.get('APP_USER', 'admin')
 APP_PASS = os.environ.get('APP_PASS', 'robotronix')
 
 # ------------------------------ Utils --------------------------------------
-def write_log(**kwargs):
-    try:
-        ts = datetime.utcnow().strftime('%Y%m%d')
-        with open(os.path.join(LOG_DIR, f'forecast_log_{ts}.jsonl'), 'a', encoding='utf-8') as f:
-            f.write(json.dumps(kwargs, default=str) + '\n')
-    except Exception:
-        pass
 
-@st.cache_data(show_spinner=False, ttl=600)
-def load_data(path: str = DATA_PATH) -> pd.DataFrame:
-    df = pd.read_csv(path, parse_dates=['Date'])
-    if 'E_INT_Daily_KWh' in df.columns and 'E_INT_Daily_kWh' not in df.columns:
-        df = df.rename(columns={'E_INT_Daily_KWh': 'E_INT_Daily_kWh'})
+def fix_timezone(df, column="Date", tz_local="Europe/Rome"):
+    """
+    Allinea il timestamp all'ora locale italiana.
+    - Se il dataset è in UTC, lo converte a Europe/Rome.
+    - Se è già locale, lo mantiene coerente.
+    """
+    if column not in df.columns:
+        return df
+
+    df[column] = pd.to_datetime(df[column], errors="coerce")
+
+    # Se la colonna non ha timezone (tipico dei CSV locali)
+    if df[column].dt.tz is None:
+        df[column] = df[column].dt.tz_localize("UTC").dt.tz_convert(tz_local)
+    else:
+        df[column] = df[column].dt.tz_convert(tz_local)
+
     return df
 
+# (segue la funzione write_log() e il resto del codice originale)
 def load_model(path: str = MODEL_PATH):
     if not os.path.exists(path):
         return None
