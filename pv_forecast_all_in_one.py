@@ -468,8 +468,6 @@ for k,v in {'lat':DEFAULT_LAT,'lon':DEFAULT_LON,'tilt':DEFAULT_TILT,'orient':DEF
     st.session_state.setdefault(k,v)
 tab1, tab2, tab3, tab4, tab5 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa','🛡️ Validazione previsione DOMANI'])
 
-# ---- Selezione metodo previsione ----
-_method = st.selectbox("Metodo di previsione", ["Random Forest", "Fisico semplificato", "Ibrido ML + Fisico"], index=0, key="method_select_tab3")
 
 # ---- TAB 1: Storico ---- #
 with tab1:
@@ -490,7 +488,14 @@ with tab1:
 # ---- TAB 2: Modello ---- #
 with tab2:
     st.subheader('🧠 Modello di previsione')
-
+    
+    # ---- Selezione metodo previsione ----
+    _method = st.selectbox(
+        "Metodo di previsione",
+         ["Random Forest", "Fisico semplificato", "Ibrido ML + Fisico"], 
+         index=0, 
+         key="method_select_tab3"
+    )
     # --- Carica CSV aggiuntivi per ampliare il training ---
     st.markdown("📂 **Carica altri file CSV di dati storici per ampliare il training del modello:**")
     uploaded_files = st.file_uploader(
@@ -565,7 +570,6 @@ with tab2:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-# ---- TAB 3: Previsioni (4 giorni) ---- #
 # ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('🔮 Previsioni 4 giorni (15 min)')
