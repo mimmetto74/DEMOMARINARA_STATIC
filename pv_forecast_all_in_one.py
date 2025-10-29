@@ -736,18 +736,18 @@ with tab3:
                             orient=st.session_state['orient'],
                             provider_pref=st.session_state['provider_pref'],
                             plant_kw=st.session_state['plant_kw']
-                      )
+                       )
 
-                     # Salvataggio CSV
-                      cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df_domani.columns]
-                      base_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
-                      df_domani[cols].to_csv(base_path, index=False)
+                       # Salvataggio CSV
+                       cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df_domani.columns]
+                       base_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
+                       df_domani[cols].to_csv(base_path, index=False)
                       
-                      st.success(f"✅ Previsione DOMANI salvata con successo in: `{base_path}`")
-                      st.caption(f"Provider: {provider_d} | Energia stimata: {energy_d:.1f} kWh | Picco: {peak_d:.1f} kW")
+                       st.success(f"✅ Previsione DOMANI salvata con successo in: `{base_path}`")
+                       st.caption(f"Provider: {provider_d} | Energia stimata: {energy_d:.1f} kWh | Picco: {peak_d:.1f} kW")
 
                     except Exception as e:
-                      st.error(f"❌ Errore durante il salvataggio: {e}")
+                       st.error(f"❌ Errore durante il salvataggio: {e}")
 
 # ============================================================
 # ⚙️ Metodo fisico semplificato
@@ -821,78 +821,78 @@ with tab4:
     # Mostra la mappa nella pagina Streamlit
     st_folium(m, width=900, height=500)
 
-# ---- TAB 5: Validazione previsione DOMANI (REPLACED) ---- #
-# ---- TAB 5: Validazione con dati reali (Analysis) ---- #
-with tab5:
-    st.subheader("🛡️ Validazione previsioni con dati reali (Analysis)")
-    st.caption("Confronto tra previsione salvata e produzione reale estratta dal modello Teseo.")
 
-    forecast_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
-    uploaded_file = st.file_uploader("📂 Carica file dati reali (analisis.csv o .xlsx)", type=["csv", "xls", "xlsx"])
+    # ---- TAB 5: Validazione con dati reali (Analysis) ---- #
+    with tab5:
+        st.subheader("🛡️ Validazione previsioni con dati reali (Analysis)")
+        st.caption("Confronto tra previsione salvata e produzione reale estratta dal modello Teseo.")
 
-    if uploaded_file is None:
-        st.info("📥 Carica il file dei dati reali (ad esempio 'analisis.csv').")
-    elif not os.path.exists(forecast_path):
-        st.warning("⚠️ Nessuna previsione trovata. Prima salva la previsione di domani dal Tab 3.")
-    else:
-        try:
-            # --- Legge file reale ---
-            if uploaded_file.name.endswith(".csv"):
-                df_real = pd.read_csv(uploaded_file)
-            else:
-                df_real = pd.read_excel(uploaded_file)
+        forecast_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
+        uploaded_file = st.file_uploader("📂 Carica file dati reali (analisis.csv o .xlsx)", type=["csv", "xls", "xlsx"])
 
-            # Normalizza nomi colonne
-            df_real.columns = [c.strip().lower() for c in df_real.columns]
-            if "meteorologica" not in df_real.columns:
-                st.error("❌ Colonna 'meteorologica' non trovata nel file reale.")
-                st.stop()
+        if uploaded_file is None:
+            st.info("📥 Carica il file dei dati reali (ad esempio 'analisis.csv').")
+        elif not os.path.exists(forecast_path):
+            st.warning("⚠️ Nessuna previsione trovata. Prima salva la previsione di domani dal Tab 3.")
+        else:
+            try:
+                # --- Legge file reale ---
+                if uploaded_file.name.endswith(".csv"):
+                    df_real = pd.read_csv(uploaded_file)
+                else:
+                    df_real = pd.read_excel(uploaded_file)
 
-            df_real = df_real.rename(columns={"meteorologica": "Reale_kW"})
-            df_real = df_real.dropna(subset=["Reale_kW"]).reset_index(drop=True)
+                # Normalizza nomi colonne
+                df_real.columns = [c.strip().lower() for c in df_real.columns]
+                if "Meteorologica" not in df_real.columns:
+                    st.error("❌ Colonna 'meteorologica' non trovata nel file reale.")
+                    st.stop()
 
-            # --- Legge previsione salvata ---
-            df_fore = pd.read_csv(forecast_path)
-            if "kWh_curve" not in df_fore.columns:
+                df_real = df_real.rename(columns={"Meteorologica": "Reale_kW"})
+                df_real = df_real.dropna(subset=["Reale_kW"]).reset_index(drop=True)
+
+                # --- Legge previsione salvata ---
+                df_fore = pd.read_csv(forecast_path)
+                if "kWh_curve" not in df_fore.columns:
                 st.error("❌ Colonna 'kWh_curve' non trovata nella previsione salvata.")
                 st.stop()
 
-            df_fore = df_fore.rename(columns={"kWh_curve": "Previsto_kW"})
-            df_fore = df_fore.dropna(subset=["Previsto_kW"]).reset_index(drop=True)
+                df_fore = df_fore.rename(columns={"kWh_curve": "Previsto_kW"})
+                df_fore = df_fore.dropna(subset=["Previsto_kW"]).reset_index(drop=True)
 
-            # --- Allineamento automatico (stesso numero di punti) ---
-            n = min(len(df_real), len(df_fore))
-            df_merge = pd.DataFrame({
-                "Previsto_kW": df_fore["Previsto_kW"].iloc[:n].values,
-                "Reale_kW": df_real["Reale_kW"].iloc[:n].values
-            })
+                # --- Allineamento automatico (stesso numero di punti) ---
+                n = min(len(df_real), len(df_fore))
+                df_merge = pd.DataFrame({
+                    "Previsto_kW": df_fore["Previsto_kW"].iloc[:n].values,
+                    "Reale_kW": df_real["Reale_kW"].iloc[:n].values
+                })
 
-            # --- Metriche ---
-            from sklearn.metrics import mean_absolute_error, r2_score
-            mae = mean_absolute_error(df_merge["Reale_kW"], df_merge["Previsto_kW"])
-            mape = np.mean(np.abs((df_merge["Reale_kW"] - df_merge["Previsto_kW"]) / np.maximum(df_merge["Reale_kW"], 1e-3))) * 100
-            r2 = r2_score(df_merge["Reale_kW"], df_merge["Previsto_kW"])
+                # --- Metriche ---
+                from sklearn.metrics import mean_absolute_error, r2_score
+                    mae = mean_absolute_error(df_merge["Reale_kW"], df_merge["Previsto_kW"])
+                    mape = np.mean(np.abs((df_merge["Reale_kW"] - df_merge["Previsto_kW"]) / np.maximum(df_merge["Reale_kW"], 1e-3))) * 100
+                    r2 = r2_score(df_merge["Reale_kW"], df_merge["Previsto_kW"])
 
-            st.success(f"✅ Accuratezza previsione:")
-            st.write(f"• **MAE:** {mae:.3f} kW")
-            st.write(f"• **MAPE:** {mape:.2f}%")
-            st.write(f"• **R²:** {r2:.3f}")
+                    st.success(f"✅ Accuratezza previsione:")
+                    st.write(f"• **MAE:** {mae:.3f} kW")
+                    st.write(f"• **MAPE:** {mape:.2f}%")
+                    st.write(f"• **R²:** {r2:.3f}")
 
-            # --- Grafico comparativo ---
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=df_merge["Reale_kW"], mode="lines", name="Reale (Teseo)", line=dict(color="blue")))
-            fig.add_trace(go.Scatter(y=df_merge["Previsto_kW"], mode="lines", name="Previsto (Modello ML)", line=dict(color="orange")))
-            fig.update_layout(
-                title="📊 Confronto Reale (Teseo) vs Previsto (Modello)",
-                xaxis_title="Indice temporale (punti 15-min)",
-                yaxis_title="Potenza (kW)",
-                template="plotly_white",
-                height=450
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                    # --- Grafico comparativo ---
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(y=df_merge["Reale_kW"], mode="lines", name="Reale (Teseo)", line=dict(color="blue")))
+                    fig.add_trace(go.Scatter(y=df_merge["Previsto_kW"], mode="lines", name="Previsto (Modello ML)", line=dict(color="orange")))
+                    fig.update_layout(
+                        title="📊 Confronto Reale (Teseo) vs Previsto (Modello)",
+                        xaxis_title="Indice temporale (punti 15-min)",
+                        yaxis_title="Potenza (kW)",
+                        template="plotly_white",
+                        height=450
+                )    
+                st.plotly_chart(fig, use_container_width=True)
 
-        except Exception as e:
-            st.error(f"❌ Errore durante la validazione: {e}")
+            except Exception as e:
+                st.error(f"❌ Errore durante la validazione: {e}")
 
 
 
