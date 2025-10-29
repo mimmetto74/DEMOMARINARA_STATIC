@@ -822,74 +822,78 @@ with tab4:
     st_folium(m, width=900, height=500)
 
 # ---- TAB 5: Validazione previsione DOMANI (REPLACED) ---- #
+# ---- TAB 5: Validazione con dati reali (Analysis) ---- #
 with tab5:
-    st.subheader('🛡️ Validazione previsione DOMANI')
-    st.caption('Confronto tra previsione base (salvata ieri) e previsione aggiornata: differenza assoluta 15-min e integrale.')
+    st.subheader("🛡️ Validazione previsioni con dati reali (Analysis)")
+    st.caption("Confronto tra previsione salvata e produzione reale estratta dal modello Teseo.")
 
-    base_path = os.path.join(LOG_DIR, 'forecast_domani_base.csv')
+    forecast_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
+    uploaded_file = st.file_uploader("📂 Carica file dati reali (analisis.csv o .xlsx)", type=["csv", "xls", "xlsx"])
 
-    col1, col2 = st.columns([1,1])
-    refresh_provider = col1.selectbox('Provider confronto', ['Auto', 'Meteomatics', 'Open-Meteo'], index=0)
-    btn = col2.button('🔄 Aggiorna confronto', use_container_width=True)
-
-    if not os.path.exists(base_path):
-        st.warning('⚠️ Nessuna base DOMANI trovata. Calcola prima le previsioni in Tab 3 (verrà salvata automaticamente).')
+    if uploaded_file is None:
+        st.info("📥 Carica il file dei dati reali (ad esempio 'analisis.csv').")
+    elif not os.path.exists(forecast_path):
+        st.warning("⚠️ Nessuna previsione trovata. Prima salva la previsione di domani dal Tab 3.")
     else:
         try:
-            df_base = pd.read_csv(base_path, parse_dates=['time'])
-            st.caption(f"✅ Base DOMANI caricata: {len(df_base)} punti — dal {df_base['time'].min().strftime('%d/%m %H:%M')}")
+            # --- Legge file reale ---
+            if uploaded_file.name.endswith(".csv"):
+                df_real = pd.read_csv(uploaded_file)
+            else:
+                df_real = pd.read_excel(uploaded_file)
+
+            # Normalizza nomi colonne
+            df_real.columns = [c.strip().lower() for c in df_real.columns]
+            if "meteorologica" not in df_real.columns:
+                st.error("❌ Colonna 'meteorologica' non trovata nel file reale.")
+                st.stop()
+
+            df_real = df_real.rename(columns={"meteorologica": "Reale_kW"})
+            df_real = df_real.dropna(subset=["Reale_kW"]).reset_index(drop=True)
+
+            # --- Legge previsione salvata ---
+            df_fore = pd.read_csv(forecast_path)
+            if "kWh_curve" not in df_fore.columns:
+                st.error("❌ Colonna 'kWh_curve' non trovata nella previsione salvata.")
+                st.stop()
+
+            df_fore = df_fore.rename(columns={"kWh_curve": "Previsto_kW"})
+            df_fore = df_fore.dropna(subset=["Previsto_kW"]).reset_index(drop=True)
+
+            # --- Allineamento automatico (stesso numero di punti) ---
+            n = min(len(df_real), len(df_fore))
+            df_merge = pd.DataFrame({
+                "Previsto_kW": df_fore["Previsto_kW"].iloc[:n].values,
+                "Reale_kW": df_real["Reale_kW"].iloc[:n].values
+            })
+
+            # --- Metriche ---
+            from sklearn.metrics import mean_absolute_error, r2_score
+            mae = mean_absolute_error(df_merge["Reale_kW"], df_merge["Previsto_kW"])
+            mape = np.mean(np.abs((df_merge["Reale_kW"] - df_merge["Previsto_kW"]) / np.maximum(df_merge["Reale_kW"], 1e-3))) * 100
+            r2 = r2_score(df_merge["Reale_kW"], df_merge["Previsto_kW"])
+
+            st.success(f"✅ Accuratezza previsione:")
+            st.write(f"• **MAE:** {mae:.3f} kW")
+            st.write(f"• **MAPE:** {mape:.2f}%")
+            st.write(f"• **R²:** {r2:.3f}")
+
+            # --- Grafico comparativo ---
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(y=df_merge["Reale_kW"], mode="lines", name="Reale (Teseo)", line=dict(color="blue")))
+            fig.add_trace(go.Scatter(y=df_merge["Previsto_kW"], mode="lines", name="Previsto (Modello ML)", line=dict(color="orange")))
+            fig.update_layout(
+                title="📊 Confronto Reale (Teseo) vs Previsto (Modello)",
+                xaxis_title="Indice temporale (punti 15-min)",
+                yaxis_title="Potenza (kW)",
+                template="plotly_white",
+                height=450
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
         except Exception as e:
-            st.error(f"Errore lettura base DOMANI: {e}")
-            df_base = None
+            st.error(f"❌ Errore durante la validazione: {e}")
 
-        if btn and df_base is not None:
-            try:
-                # Nuova previsione DOMANI (aggiornata)
-                df_new, _, _, _, _, provider, status, url = forecast_for_day(
-                    lat=st.session_state['lat'],
-                    lon=st.session_state['lon'],
-                    offset_days=1, label='Domani', model=load_model(),
-                    tilt=st.session_state['tilt'], orient=st.session_state['orient'],
-                    provider_pref=refresh_provider, plant_kw=st.session_state['plant_kw'],
-                    autosave=False
-                )
-                if df_new is None or df_new.empty:
-                    st.warning("Nessun dato nuovo disponibile.")
-                else:
-                    # Allineamento per tempo (tolleranza 7 min)
-                    df_new['time'] = pd.to_datetime(df_new['time'])
-                    df_base['time'] = pd.to_datetime(df_base['time'])
-                    df_merged = pd.merge_asof(
-                        df_new.sort_values('time'),
-                        df_base.sort_values('time'),
-                        on='time', tolerance=pd.Timedelta('7min'),
-                        direction='nearest', suffixes=('_new', '_base')
-                    )
-
-                    # Richiede le colonne kWh_curve_new e kWh_curve_base
-                    if 'kWh_curve_new' in df_merged.columns and 'kWh_curve_base' in df_merged.columns:
-                        df_merged['diff_abs'] = (df_merged['kWh_curve_new'] - df_merged['kWh_curve_base']).abs()
-
-                        # Integrale (kW * ore) su 15-min → somma * 0.25
-                        quality_index = float(df_merged['diff_abs'].sum() * 0.25)
-
-                        # Normalizza su picco base (stima percentuale qualità, 100% = identica)
-                        max_val = float(max(df_merged['kWh_curve_base'].max(), 1.0))
-                        quality_pct = 100.0 * (1.0 - min(1.0, quality_index / max_val))
-
-                        st.success(f"📈 Qualità previsione: {quality_pct:.1f}%  \n(Integrale diff. assoluta = {quality_index:.2f} kWh-equivalenti)")
-
-                        # Grafico comparativo
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=df_merged['time'], y=df_merged['kWh_curve_base'], mode='lines', name='🔵 Base DOMANI'))
-                        fig.add_trace(go.Scatter(x=df_merged['time'], y=df_merged['kWh_curve_new'], mode='lines', name='🟠 Nuova previsione'))
-                        fig.add_trace(go.Scatter(x=df_merged['time'], y=df_merged['diff_abs'], mode='lines', name='⚙️ Differenza assoluta', line=dict(dash='dot')))
-                        fig.update_layout(template='plotly_white', height=420, title='📊 Confronto previsione aggiornata vs base DOMANI', yaxis_title='Potenza (kW)')
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.warning("Le colonne necessarie ('kWh_curve_base' / 'kWh_curve_new') non sono disponibili. Assicurati di aver salvato la base in Tab 3.")
-            except Exception as e:
-                st.error(f'Errore confronto: {e}')
 
 
 # ---- Added forecast methods (physical + hybrid) ----
