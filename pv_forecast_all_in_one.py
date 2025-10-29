@@ -10,8 +10,6 @@ import os, json, joblib, requests, numpy as np, pandas as pd
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import plotly.graph_objects as go
-import pytz
-from dateutil import tz
 
 # --------------------------- Config Streamlit -------------------------------
 st.set_page_config(page_title='Solar Forecast - ROBOTRONIX (v2 DEBUG)', layout='wide')
@@ -44,26 +42,40 @@ APP_PASS = os.environ.get('APP_PASS', 'robotronix')
 
 # ------------------------------ Utils --------------------------------------
 
-def fix_timezone(df, column="Date", tz_local="Europe/Rome"):
-    """
-    Allinea il timestamp all'ora locale italiana.
-    - Se il dataset è in UTC, lo converte a Europe/Rome.
-    - Se è già locale, lo mantiene coerente.
-    """
+import pytz
+from dateutil import tz
+
+def fix_timezone(df, column='Date', tz_local='Europe/Rome'):
+    \"\"\"Allinea il timestamp all'ora locale italiana (Europe/Rome).\"\"\"
     if column not in df.columns:
         return df
-
-    df[column] = pd.to_datetime(df[column], errors="coerce")
-
-    # Se la colonna non ha timezone (tipico dei CSV locali)
-    if df[column].dt.tz is None:
-        df[column] = df[column].dt.tz_localize("UTC").dt.tz_convert(tz_local)
-    else:
-        df[column] = df[column].dt.tz_convert(tz_local)
-
+    df[column] = pd.to_datetime(df[column], errors='coerce')
+    try:
+        if df[column].dt.tz is None:
+            df[column] = df[column].dt.tz_localize('UTC').dt.tz_convert(tz_local)
+        else:
+            df[column] = df[column].dt.tz_convert(tz_local)
+    except Exception as e:
+        print(f'[WARN] Timezone conversion failed for {column}:', e)
     return df
 
-# (segue la funzione write_log() e il resto del codice originale)
+def write_log(**kwargs):
+    try:
+        ts = datetime.utcnow().strftime('%Y%m%d')
+        with open(os.path.join(LOG_DIR, f'forecast_log_{ts}.jsonl'), 'a', encoding='utf-8') as f:
+            f.write(json.dumps(kwargs, default=str) + '\n')
+    except Exception:
+        pass
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_data(path: str = DATA_PATH) -> pd.DataFrame:
+    df = pd.read_csv(path, parse_dates=['Date'])
+# --- Correzione timezone automatica ---
+df = fix_timezone(df, column='Date')
+    if 'E_INT_Daily_KWh' in df.columns and 'E_INT_Daily_kWh' not in df.columns:
+        df = df.rename(columns={'E_INT_Daily_KWh': 'E_INT_Daily_kWh'})
+    return df
+
 def load_model(path: str = MODEL_PATH):
     if not os.path.exists(path):
         return None
@@ -109,6 +121,8 @@ def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None
             rows.append({'time': d.get('date'), col: d.get('value')})
 
     df = pd.DataFrame(rows)
+# --- Correzione timezone automatica per dati meteo ---
+df_meteo = fix_timezone(df_meteo, column='datetime')
     if df.empty:
         return '', df
     df['time'] = pd.to_datetime(df['time'])
@@ -131,7 +145,11 @@ def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
     times = pd.to_datetime(h.get('time', []))
     if len(times) == 0:
         return '', pd.DataFrame()
+# --- Correzione timezone automatica per dati meteo ---
+df_meteo = fix_timezone(df_meteo, column='datetime')
     df = pd.DataFrame({'time': times})
+# --- Correzione timezone automatica per dati meteo ---
+df_meteo = fix_timezone(df_meteo, column='datetime')
     if 'direct_radiation' in h: df['GlobalRad_W'] = pd.Series(h['direct_radiation']).astype(float)
     if 'cloudcover' in h: df['CloudCover_P'] = pd.Series(h['cloudcover']).astype(float)
     if 'temperature_2m' in h: df['Temp_Air'] = pd.Series(h['temperature_2m']).astype(float)
@@ -181,6 +199,8 @@ def compute_curve_and_daily(df, model, plant_kw):
 
     if model is not None:
         X = pd.DataFrame()
+# --- Correzione timezone automatica per dati meteo ---
+df_meteo = fix_timezone(df_meteo, column='datetime')
         feats = getattr(model, "feature_names_in_", [])
         col_map = {'G_M0_Wm2':'GlobalRad_W','GlobalRad_W':'G_M0_Wm2'}
         for f_ in feats:
@@ -275,7 +295,9 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
     if autosave:
         cols = [c for c in ['time','GlobalRad_W','CloudCover_P','Temp_Air','rad_corr','kWh_curve'] if c in df2.columns]
         df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
-        pd.DataFrame([{'date': str(day), 'energy_kWh': float(energy), 'peak_kW': float(peak_kW), 'cloud_mean': float(cloud_mean)}]) \
+        pd.DataFrame([{'date': str(day), 'energy_kWh': float(energy), 'peak_kW': float(peak_kW), 'cloud_mean': float(cloud_mean)}])
+# --- Correzione timezone automatica per dati meteo ---
+df_meteo = fix_timezone(df_meteo, column='datetime') \
           .to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
 
     return df2, energy, peak_kW, peak_pct, cloud_mean, provider, status, ''
@@ -307,6 +329,8 @@ def train_model():
 def compare_forecast_vs_real(day_label, forecast_df, data_path=DATA_PATH):
     try:
         df_real = pd.read_csv(data_path, parse_dates=['Date'])
+# --- Correzione timezone automatica ---
+df = fix_timezone(df, column='Date')
     except Exception as e:
         st.warning(f'⚠️ Errore caricamento storico: {e}'); return None, None, None
     if forecast_df is None or forecast_df.empty or 'time' not in forecast_df.columns:
@@ -401,7 +425,9 @@ with tab2:
         base = load_data(); dfs = [base]
         for f in uploaded_files:
             try:
-                df_new = pd.read_csv(f, parse_dates=['Date']); dfs.append(df_new)
+                df_new = pd.read_csv(f, parse_dates=['Date'])
+# --- Correzione timezone automatica ---
+df = fix_timezone(df, column='Date'); dfs.append(df_new)
                 st.success(f"✅ Aggiunto: {f.name} ({len(df_new)} righe)")
             except Exception as e:
                 st.error(f"Errore caricamento {f.name}: {e}")
@@ -414,7 +440,9 @@ with tab2:
     if c1.button('Addestra / Riaddestra modello', use_container_width=True):
         data_path = st.session_state.get('custom_dataset', DATA_PATH)
         if os.path.exists(data_path):
-            df_tmp = pd.read_csv(data_path, parse_dates=['Date']); df_tmp.to_csv(DATA_PATH, index=False)
+            df_tmp = pd.read_csv(data_path, parse_dates=['Date'])
+# --- Correzione timezone automatica ---
+df = fix_timezone(df, column='Date'); df_tmp.to_csv(DATA_PATH, index=False)
         mae, r2 = train_model(); st.session_state['last_mae'] = mae; st.session_state['last_r2'] = r2
         st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
 
@@ -450,7 +478,9 @@ with tab2:
                      'last_R2': st.session_state.get('last_r2', None)})
             fi_path = os.path.join(LOG_DIR, 'feature_importances.csv')
             if os.path.exists(fi_path):
-                try: st.dataframe(pd.read_csv(fi_path, header=None, names=['feature','importance']))
+                try: st.dataframe(pd.read_csv(fi_path, header=None, names=['feature','importance'])
+# --- Correzione timezone automatica ---
+df = fix_timezone(df, column='Date'))
                 except Exception: st.write("Impossibile leggere feature_importances.csv")
 
 # ---- TAB 3 ----------------------------------------------------------------
@@ -554,6 +584,8 @@ with tab5:
     else:
         try:
             df_base = pd.read_csv(base_path, parse_dates=['time'])
+# --- Correzione timezone automatica ---
+df = fix_timezone(df, column='Date')
             st.caption(f"✅ Base DOMANI: {len(df_base)} punti — dal {df_base['time'].min().strftime('%d/%m %H:%M')}")
         except Exception as e:
             st.error(f"Errore lettura base DOMANI: {e}"); df_base = None
