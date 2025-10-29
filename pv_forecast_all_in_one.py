@@ -745,8 +745,7 @@ with tab3:
                       
                        st.success(f"✅ Previsione DOMANI salvata con successo in: `{base_path}`")
                        st.caption(f"Provider: {provider_d} | Energia stimata: {energy_d:.1f} kWh | Picco: {peak_d:.1f} kW")
-
-                    except Exception as e:
+                   except Exception as e:
                        st.error(f"❌ Errore durante il salvataggio: {e}")
 
 # ============================================================
