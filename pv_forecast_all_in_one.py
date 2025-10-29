@@ -78,10 +78,13 @@ def write_log(**kwargs):
 @st.cache_data(show_spinner=False, ttl=600)
 def load_data(path: str = DATA_PATH) -> pd.DataFrame:
     df = pd.read_csv(path, parse_dates=['Date'])
-# --- Correzione timezone automatica ---
-df = fix_timezone(df, column='Date')
+    # ---- Correzione timezone automatica ----
+    df = fix_timezone(df, column='Date')
+
+    # ✅ RIENTRA queste righe (devono stare dentro la funzione)
     if 'E_INT_Daily_KWh' in df.columns and 'E_INT_Daily_kWh' not in df.columns:
         df = df.rename(columns={'E_INT_Daily_KWh': 'E_INT_Daily_kWh'})
+    
     return df
 
 def load_model(path: str = MODEL_PATH):
