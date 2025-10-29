@@ -688,7 +688,7 @@ with tab3:
                     now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
                     if dfp['time'].min() <= now_local <= dfp['time'].max():
                         fig.add_vline(
-                        x=pd.Timestamp(now_local),
+                        x=pd.Timestamp(now_local).to_pydatetime(),
                         line_width=2,
                         line_dash="dot",
                         line_color="red",
