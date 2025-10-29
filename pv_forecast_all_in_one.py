@@ -132,16 +132,23 @@ def fetch_meteomatics_pt15m(lat, lon, start_iso, end_iso, tilt=None, orient=None
             rows.append({'time': d.get('date'), col: d.get('value')})
 
     df = pd.DataFrame(rows)
-# --- Correzione timezone automatica per dati meteo ---
+df = pd.DataFrame(rows)
+
+# ---- Correzione timezone automatica per dati meteo ---
 df_meteo = fix_timezone(df_meteo, column='datetime')
-    if df.empty:
-        return '', df
-    df['time'] = pd.to_datetime(df['time'])
-    df = df.groupby('time', as_index=False).mean().sort_values('time')
-    for c in ['GlobalRad_W','CloudCover_P','Temp_Air']:
-        if c not in df.columns: df[c] = np.nan
-    df['provider'] = 'Meteomatics'
+
+if df.empty:
     return '', df
+
+df['time'] = pd.to_datetime(df['time'])
+df = df.groupby('time', as_index=False).mean().sort_values('time')
+
+for c in ['GlobaRad_W', 'CloudCover_P', 'Temp_Air']:
+    if c not in df.columns:
+        df[c] = np.nan
+
+df['provider'] = 'Meteomatics'
+return '', df
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
