@@ -675,27 +675,42 @@ with tab3:
                     st.warning(f"Errore calcolo picchi: {e}")
 
                 # --- Linea ora attuale ---
-                try:
-                    import pandas as pd
-                    import pytz
-                    from datetime import datetime
+try:
+    import pandas as pd
+    import pytz
+    from datetime import datetime
 
-                    now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
+    now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
+    dfp['time'] = pd.to_datetime(dfp['time'], errors='coerce')
 
-                    # Assicuriamoci che la colonna 'time' sia datetime puro
-                    dfp['time'] = pd.to_datetime(dfp['time'], errors='coerce')
-
-                    if dfp['time'].min() <= now_local <= dfp['time'].max():
-                        fig.add_vline(
-                            x=now_local,
-                            line_width=2,
-                            line_dash="dot",
-                            line_color="red",
-                            annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                            annotation_position="top right"
-                        )
-                except Exception as e:
-                    st.warning(f"Errore linea oraria: {e}")
+    if dfp['time'].min() <= now_local <= dfp['time'].max():
+        try:
+            # Primo tentativo: add_vline diretto
+            fig.add_vline(
+                x=pd.Timestamp(now_local),
+                line_width=2,
+                line_dash="dot",
+                line_color="red",
+                annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                annotation_position="top right"
+            )
+        except Exception:
+            # Fallback super-robusto: shape + annotation manuale
+            xval = pd.Timestamp(now_local)
+            fig.add_shape(
+                type="line",
+                x0=xval, x1=xval,
+                y0=0, y1=1,
+                xref="x", yref="paper",
+                line=dict(width=2, dash="dot", color="red")
+            )
+            fig.add_annotation(
+                x=xval, y=1, xref="x", yref="paper",
+                text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                showarrow=False, yshift=10
+            )
+except Exception as e:
+    st.warning(f"Errore linea oraria: {e}")
 
                 # --- Layout e risultati ---
                 fig.update_layout(
