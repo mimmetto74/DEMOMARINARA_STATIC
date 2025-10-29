@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-# -*- coding: utf-8 -*-
-"""
 Solar Forecast - ROBOTRONIX for IMEPOWER (Versione v2 – con Coerenza Energetica)
 - Build completa con struttura ordinata, modalità Debug, training RF,
   previsioni 15-min (Ieri/Oggi/Domani/Dopodomani), mappa e validazione DOMANI.
