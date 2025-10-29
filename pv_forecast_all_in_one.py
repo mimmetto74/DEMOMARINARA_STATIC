@@ -242,18 +242,13 @@ def train_model():
 def compute_curve_and_daily(df, model, plant_kw):
     """
     Calcola la curva di produzione stimata a partire dai dati meteo.
-    Funzionalità:
-      - Conversione automatica del tempo in Europe/Rome
-      - Mantiene i dati grezzi per diagnostica
-      - Allineamento temporale corretto (nessuno shift)
-      - Compatibilità completa con Meteomatics / Open-Meteo
-      - Normalizzazione per potenza impianto
+    - Niente conversione di fuso (già fatta in forecast_for_day)
+    - Resample centrato per evitare shift dei picchi
+    - Output in ora locale (Europe/Rome) senza timezone
     """
     import numpy as np
     import pandas as pd
-    import pytz
 
-    # --- Validazione iniziale ---
     if df is None or df.empty:
         return df, 0.0, 0.0, 0.0, 0.0
 
@@ -261,25 +256,12 @@ def compute_curve_and_daily(df, model, plant_kw):
     df['time'] = pd.to_datetime(df['time'], errors='coerce')
     df = df.dropna(subset=['time']).sort_values('time')
 
-    # ✅ Conversione automatica in ora locale
-    try:
-        tz_local = pytz.timezone("Europe/Rome")
-        # Se il timestamp non ha timezone, assumiamo UTC
-        if df['time'].dt.tz is None:
-            df['time'] = df['time'].dt.tz_localize(pytz.UTC)
-        df['time'] = df['time'].dt.tz_convert(tz_local).dt.tz_localize(None)
-    except Exception as e:
-        st.warning(f"⚠️ Errore conversione fuso orario: {e}")
-
-    # --- Conversione robusta di colonne numeriche ---
+    # --- Conversione numerica robusta ---
     for col in df.columns:
         if col != 'time':
-            try:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            except Exception:
-                pass
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # --- Calcolo irradianza corretta (mantiene dati grezzi) ---
+    # --- Irradianza ---
     if 'GlobalRad_W' in df.columns:
         df['rad_corr'] = df['GlobalRad_W'].fillna(0)
     elif 'G_M0_Wm2' in df.columns:
@@ -287,21 +269,19 @@ def compute_curve_and_daily(df, model, plant_kw):
         df = df.rename(columns={'G_M0_Wm2': 'GlobalRad_W'})
     else:
         df['rad_corr'] = 0.0
-        st.warning("⚠️ Nessuna colonna di irradianza trovata nei dati meteo.")
+        st.warning("⚠️ Nessuna colonna di irradianza trovata.")
 
-    # --- Resample ogni 15 minuti (preserva media delle numeriche) ---
-    df = df.set_index('time').resample('15T').mean(numeric_only=True).reset_index()
+    # --- Resample centrato ---
+    df = (df.set_index('time')
+            .resample('15min', label='center', closed='center')
+            .mean(numeric_only=True)
+            .reset_index())
 
-    # --- Predizione modello se disponibile ---
+    # --- Predizione modello o fallback ---
     if model is not None:
-        model_features = getattr(model, "feature_names_in_", [])
         X = pd.DataFrame()
-
-        # Mappa automatica dei nomi delle feature
-        col_map = {
-            'G_M0_Wm2': 'GlobalRad_W',
-            'GlobalRad_W': 'G_M0_Wm2'
-        }
+        model_features = getattr(model, "feature_names_in_", [])
+        col_map = {'G_M0_Wm2': 'GlobalRad_W', 'GlobalRad_W': 'G_M0_Wm2'}
 
         for feat in model_features:
             if feat in df.columns:
@@ -314,27 +294,23 @@ def compute_curve_and_daily(df, model, plant_kw):
         try:
             df['kWh_curve'] = model.predict(X)
         except ValueError as e:
-            st.warning(f"⚠️ Mismatch colonne modello: {e}. Riprovo adattando i nomi.")
-            cols = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else X.columns
-            X = X.reindex(columns=cols, fill_value=0)
+            st.warning(f"⚠️ Mismatch colonne modello: {e}")
+            X = X.reindex(columns=model_features, fill_value=0)
             df['kWh_curve'] = model.predict(X)
 
         # Normalizza rispetto alla potenza impianto
         if df['kWh_curve'].max() > 0:
-            df['kWh_curve'] = (
-                df['kWh_curve'] / df['kWh_curve'].max()
-            ) * plant_kw
+            df['kWh_curve'] = (df['kWh_curve'] / df['kWh_curve'].max()) * plant_kw
     else:
-        # --- Fallback proporzionale all'irradianza ---
         ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'rad_corr'
         max_val = max(df[ref_col].max(), 1)
         df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max_val
 
-    # --- Smussamento centrato (no shift temporale) ---
+    # --- Smussamento centrato ---
     df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
 
-    # --- Metriche giornaliere ---
-    pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)  # ogni passo = 15 min
+    # --- Metriche ---
+    pred_kwh = df['kWh_curve'].sum() * (15 / 60.0)
     peak_kW = df['kWh_curve'].max()
     peak_pct = 100 * peak_kW / plant_kw if plant_kw > 0 else np.nan
     cloud_mean = df['CloudCover_P'].mean() if 'CloudCover_P' in df.columns else np.nan
@@ -343,7 +319,10 @@ def compute_curve_and_daily(df, model, plant_kw):
 
 
 def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider_pref, plant_kw, autosave=True):
-    """Genera la previsione per un giorno specifico (ieri/oggi/domani...)"""
+    """Genera la previsione per un giorno specifico (ieri/oggi/domani...)."""
+    from datetime import datetime, timedelta, timezone
+    import pandas as pd, pytz, numpy as np, os
+
     day = (datetime.now(timezone.utc).date() + timedelta(days=offset_days))
     start_iso = f'{day}T00:00:00Z'
     end_iso = f'{day + timedelta(days=1)}T00:00:00Z'
@@ -374,36 +353,69 @@ def forecast_for_day(lat, lon, offset_days, label, model, tilt, orient, provider
         if df is None or df.empty:
             url, df, provider, status = try_openmeteo()
 
-    # --- Se nessun dato disponibile ---
+    # --- Nessun dato ---
     if df is None or df.empty:
-        write_log(
-            timestamp=datetime.utcnow().isoformat(),
-            day_label=label,
-            provider=provider,
-            status=status,
-            url=url,
-            lat=lat,
-            lon=lon,
-            tilt=tilt,
-            orient=orient,
-            note='no data'
-        )
+        write_log(timestamp=datetime.utcnow().isoformat(),
+                  day_label=label, provider=provider, status=status,
+                  url=url, lat=lat, lon=lon, tilt=tilt, orient=orient, note='no data')
         return None, 0.0, 0.0, 0.0, float('nan'), provider, status, url
 
-    # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive)
+    # ✅ Conversione una sola volta (UTC → Europe/Rome)
     tz_status = "unknown"
     try:
-        import pytz
         tz_local = pytz.timezone("Europe/Rome")
         times = pd.to_datetime(df['time'], errors='coerce')
         if times.dt.tz is None:
-            times = times.dt.tz_localize(pytz.UTC)
-        times = times.dt.tz_convert(tz_local)
+            times = times.dt.tz_localize('UTC').dt.tz_convert(tz_local)
+        else:
+            times = times.dt.tz_convert(tz_local)
         df['time'] = times.dt.tz_localize(None)
-        tz_status = "UTC→Europe/Rome (naive per grafico)"
+        tz_status = "✅ UTC→Europe/Rome"
     except Exception as e:
-        tz_status = f"error: {e}"
-        st.warning(f"⚠️ Normalizzazione oraria non riuscita: {e}")
+        tz_status = f"⚠️ errore conversione: {e}"
+        st.warning(tz_status)
+
+    # --- Calcolo curve ---
+    df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
+
+    # --- Log ---
+    write_log(timestamp=datetime.utcnow().isoformat(),
+              day_label=label, provider=provider, status=status, url=url,
+              lat=lat, lon=lon, tilt=tilt, orient=orient, tz_status=tz_status,
+              pred_kwh=float(pred_kwh), peak_kW=float(peak_kW), cloud_mean=float(cloud_mean))
+
+    # --- Autosave ---
+    if autosave:
+        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df2.columns]
+        df2[cols].to_csv(os.path.join(LOG_DIR, f'curve_{label.lower()}_15min.csv'), index=False)
+        pd.DataFrame([{
+            'date': str(day),
+            'energy_kWh': float(pred_kwh),
+            'peak_kW': float(peak_kW),
+            'cloud_mean': float(cloud_mean)
+        }]).to_csv(os.path.join(LOG_DIR, f'daily_{label.lower()}.csv'), index=False)
+
+    return df2, pred_kwh, peak_kW, peak_pct, cloud_mean, provider, status, url
+
+
+   
+   # ✅ Normalizzazione oraria (UTC → Europe/Rome → naive per grafico)
+    tz_status = "unknown"
+    try:
+         import pytz
+         tz_local = pytz.timezone("Europe/Rome")
+         times = pd.to_datetime(df['time'], errors='coerce')
+         # Se non ha fuso orario, localizza a UTC prima di convertire
+         if times.dt.tz is None:
+             times = times.dt.tz_localize('UTC').dt.tz_convert(tz_local)
+         else:
+            times = times.dt.tz_convert(tz_local)
+         # Rimuove timezone per grafico Plotly
+         df['time'] = times.dt.tz_localize(None)
+         tz_status = "✅ UTC→Europe/Rome (naive per grafico)"
+    except Exception as e:
+         tz_status = f"⚠️ errore conversione: {e}"
+         st.warning(tz_status)
 
     # --- Calcolo curve e parametri ---
     df2, pred_kwh, peak_kW, peak_pct, cloud_mean = compute_curve_and_daily(df, model, plant_kw)
@@ -565,7 +577,6 @@ with tab2:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-# ---- TAB 3: Previsioni (4 giorni) ---- #
 # ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('🔮 Previsioni 4 giorni (15 min)')
