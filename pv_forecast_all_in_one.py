@@ -792,71 +792,72 @@ with tab5:
         st.warning("⚠️ Nessuna previsione trovata. Prima salva la previsione di domani dal Tab 3.")
     else:
         try:
-        # --- Legge file reale (robusto per CSV con ; e virgola decimale) ---
-        def _read_real_file(uploaded_file):
-            name = uploaded_file.name.lower()
+            # --- Legge file reale (robusto per CSV con ; e virgola decimale) ---
+            def _read_real_file(uploaded_file):
+                name = uploaded_file.name.lower()
 
-            # 1) Excel diretto
-            if name.endswith((".xls", ".xlsx")):
-                df = pd.read_excel(uploaded_file)
-            else:
-                # 2) CSV – proviamo vari separator/decimal
-                tried = [
-                    dict(sep=None, engine="python"),      # auto-detect
-                    dict(sep=";", decimal=","),           # classico EU
-                    dict(sep=";", decimal="."),           # ; con punto decimale
-                    dict(sep=",", decimal=","),           # , con virgola decimale
-                    dict(sep=",", decimal=".")            # CSV classico
-                ]
-                last_err = None
-                for opts in tried:
-                    try:
-                        uploaded_file.seek(0)
-                        df = pd.read_csv(
-                            uploaded_file,
-                            **opts,
-                            skip_blank_lines=True,
-                            comment="#"
-                        )
-                        break
-                    except Exception as e:
-                        last_err = e
-                        continue
+                # 1) Excel diretto
+                if name.endswith((".xls", ".xlsx")):
+                    df = pd.read_excel(uploaded_file)
                 else:
-                    raise last_err
+                    # 2) CSV – proviamo vari separator/decimal
+                    tried = [
+                        dict(sep=None, engine="python"),
+                        dict(sep=";", decimal=","),
+                        dict(sep=";", decimal="."),
+                        dict(sep=",", decimal=","),
+                        dict(sep=",", decimal=".")
+                    ]
+                    last_err = None
+                    for opts in tried:
+                        try:
+                            uploaded_file.seek(0)
+                            df = pd.read_csv(
+                                uploaded_file,
+                                **opts,
+                                skip_blank_lines=True,
+                                comment="#"
+                            )
+                            break
+                        except Exception as e:
+                            last_err = e
+                            continue
+                    else:
+                        raise last_err
 
-            # 3) Normalizza nomi colonne
-            df.columns = [c.strip().lower() for c in df.columns]
+                # 3) Normalizza nomi colonne
+                df.columns = [c.strip().lower() for c in df.columns]
 
-            # 4) Se è una sola colonna “grezza”, prova a splittare
-            if df.shape[1] == 1 and df.iloc[:, 0].dtype == object:
-                s = df.iloc[:, 0].astype(str)
-                df = s.str.replace("\t", ";", regex=False).str.split(r"[;,]", expand=True)
-                df.columns = [f"col{i}" for i in range(df.shape[1])]
+                # 4) Se è una sola colonna “grezza”, prova a splittare
+                if df.shape[1] == 1 and df.iloc[:, 0].dtype == object:
+                    s = df.iloc[:, 0].astype(str)
+                    df = s.str.replace("\t", ";", regex=False).str.split(r"[;,]", expand=True)
+                    df.columns = [f"col{i}" for i in range(df.shape[1])]
 
-            # 5) Scegli la colonna reale in kW
-            if "meteorologica" in df.columns:
-                serie = df["meteorologica"].astype(str)
-            else:
-                num_cols = []
-                for c in df.columns:
-                    vals = pd.to_numeric(df[c], errors="coerce")
-                    if vals.notna().sum() > 0:
-                        num_cols.append(c)
-                if not num_cols:
-                    raise ValueError("Nessuna colonna numerica trovata nel file reale.")
-                serie = df[num_cols[0]].astype(str)
+                # 5) Scegli la colonna reale in kW
+                if "meteorologica" in df.columns:
+                    serie = df["meteorologica"].astype(str)
+                else:
+                    num_cols = []
+                    for c in df.columns:
+                        vals = pd.to_numeric(df[c], errors="coerce")
+                        if vals.notna().sum() > 0:
+                            num_cols.append(c)
+                    if not num_cols:
+                        raise ValueError("Nessuna colonna numerica trovata nel file reale.")
+                    serie = df[num_cols[0]].astype(str)
 
-            # 6) Pulisci numeri: rimuovi separatore migliaia e usa punto decimale
-            serie = (serie.str.replace(".", "", regex=False)
-                           .str.replace(",", ".", regex=False))
-            serie = pd.to_numeric(serie, errors="coerce")
+                # 6) Pulisci numeri: rimuovi separatore migliaia e usa punto decimale
+                serie = (serie.str.replace(".", "", regex=False)
+                               .str.replace(",", ".", regex=False))
+                serie = pd.to_numeric(serie, errors="coerce")
 
-            out = pd.DataFrame({"Reale_kW": serie})
-            out = out.dropna(subset=["Reale_kW"]).reset_index(drop=True)
-            return out
+                out = pd.DataFrame({"Reale_kW": serie})
+                out = out.dropna(subset=["Reale_kW"]).reset_index(drop=True)
+                return out
 
-        df_real = _read_real_file(uploaded_file)
+            df_real = _read_real_file(uploaded_file)
+
 
             # --- Legge previsione salvata ---
             df_fore = pd.read_csv(forecast_path)
@@ -936,49 +937,4 @@ def forecast_hybrid(df, model, plant_kw, w_ml=0.7):
 
 
 
-
-# ===================== TAB 5 — Validazione previsione DOMANI ===================== #
-try:
-    tab_titles = ['Validazione', '🛡️ Validazione', '🛡️ Validazione previsione DOMANI']
-    # Best effort: create a standalone section if tabs structure is unknown
-    st.markdown('---')
-    st.header('🛡️ Validazione previsione DOMANI')
-    base_path = os.path.join(LOG_DIR, 'forecast_domani_base.csv')
-    provider_opt = st.selectbox('Provider per confronto', ['Open-Meteo'], index=0)
-    if not os.path.exists(base_path):
-        st.warning('⚠️ Nessuna base DOMANI trovata: calcola prima le previsioni in Tab 3 (salvataggio automatico).')
-    else:
-        df_base = pd.read_csv(base_path, parse_dates=['time'])
-        st.caption(f"✅ Base caricata: {len(df_base)} punti, dal {df_base['time'].min().strftime('%d/%m %H:%M')}")
-        if st.button('🔄 Aggiorna confronto DOMANI', use_container_width=True):
-            df_new,_,_,_,_,_,_,_ = forecast_for_day(
-                st.session_state.get('lat', 0.0), st.session_state.get('lon', 0.0),
-                1, 'Domani', load_model(),
-                st.session_state.get('tilt', 0.0), st.session_state.get('orient', 0.0),
-                provider_opt, st.session_state.get('plant_kw', 1000), 
-            )
-            if df_new is None or df_new.empty:
-                st.warning('Nessun dato nuovo disponibile.')
-            else:
-                df_new['time'] = pd.to_datetime(df_new['time'])
-                df_base['time'] = pd.to_datetime(df_base['time'])
-                dfm = pd.merge_asof(df_new.sort_values('time'), df_base.sort_values('time'),
-                                    on='time', tolerance=pd.Timedelta('7min'),
-                                    direction='nearest', suffixes=('_new','_base'))
-                if 'kWh_curve_new' in dfm.columns and 'kWh_curve_base' in dfm.columns:
-                    dfm['diff_abs'] = (dfm['kWh_curve_new'] - dfm['kWh_curve_base']).abs()
-                    q_idx = float(dfm['diff_abs'].sum() * (15/60))
-                    denom = float(max(dfm['kWh_curve_base'].max(), 1.0))
-                    q_pct = 100.0 * (1.0 - min(1.0, q_idx / denom))
-                    st.success(f'📈 Qualità previsione: {q_pct:.1f}% (Integrale diff. = {q_idx:.2f})')
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=dfm['time'], y=dfm['kWh_curve_base'], mode='lines', name='🔵 Base DOMANI'))
-                    fig.add_trace(go.Scatter(x=dfm['time'], y=dfm['kWh_curve_new'], mode='lines', name='🟠 Nuova previsione'))
-                    fig.add_trace(go.Scatter(x=dfm['time'], y=dfm['diff_abs'], mode='lines', name='⚙️ Differenza assoluta', line=dict(dash='dot')))
-                    fig.update_layout(template='plotly_white', height=420, title='📊 Confronto vs Base DOMANI', yaxis_title='kW')
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.warning("Colonne 'kWh_curve_base'/'kWh_curve_new' non disponibili: assicurati che la base sia stata salvata con lo stesso metodo.")
-except Exception as e:
-    st.error(f'Errore nella sezione Validazione: {e}')
 
