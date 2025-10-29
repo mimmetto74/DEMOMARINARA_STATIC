@@ -675,9 +675,7 @@ with tab3:
                         t_rad = dfp.loc[idx_rad, 'time']
                         t_prod = dfp.loc[idx_prod, 'time']
                         delta_min = abs((t_rad - t_prod).total_seconds()) / 60
-                        if delta_min > 30:
-                            st.warning(f"⚠️ Differenza picchi: {int(delta_min)} minuti (☀️ {t_rad.strftime('%H:%M')} vs ⚡ {t_prod.strftime('%H:%M')})")
-                        else:
+                        if delta_min <= 30:
                             st.success(f"✅ Picchi allineati ({t_prod.strftime('%H:%M')})")
                 except Exception as e:
                     st.warning(f"Errore calcolo picchi: {e}")
@@ -688,7 +686,7 @@ with tab3:
                     now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
                     if dfp['time'].min() <= now_local <= dfp['time'].max():
                         fig.add_vline(
-                        x=pd.Timestamp(now_local).to_pydatetime(),
+                        x=now_local,
                         line_width=2,
                         line_dash="dot",
                         line_color="red",
