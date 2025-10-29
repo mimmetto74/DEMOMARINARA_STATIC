@@ -468,6 +468,8 @@ for k,v in {'lat':DEFAULT_LAT,'lon':DEFAULT_LON,'tilt':DEFAULT_TILT,'orient':DEF
     st.session_state.setdefault(k,v)
 tab1, tab2, tab3, tab4, tab5 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa','🛡️ Validazione previsione DOMANI'])
 
+# ---- Selezione metodo previsione ----
+_method = st.selectbox("Metodo di previsione", ["Random Forest", "Fisico semplificato", "Ibrido ML + Fisico"], index=0, key="method_select_tab3")
 
 # ---- TAB 1: Storico ---- #
 with tab1:
@@ -488,14 +490,7 @@ with tab1:
 # ---- TAB 2: Modello ---- #
 with tab2:
     st.subheader('🧠 Modello di previsione')
-    
-    # ---- Selezione metodo previsione ----
-    _method = st.selectbox(
-        "Metodo di previsione",
-         ["Random Forest", "Fisico semplificato", "Ibrido ML + Fisico"], 
-         index=0, 
-         key="method_select_tab3"
-    )
+
     # --- Carica CSV aggiuntivi per ampliare il training ---
     st.markdown("📂 **Carica altri file CSV di dati storici per ampliare il training del modello:**")
     uploaded_files = st.file_uploader(
@@ -570,6 +565,7 @@ with tab2:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+# ---- TAB 3: Previsioni (4 giorni) ---- #
 # ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('🔮 Previsioni 4 giorni (15 min)')
@@ -675,42 +671,42 @@ with tab3:
                     st.warning(f"Errore calcolo picchi: {e}")
 
                 # --- Linea ora attuale ---
-try:
-    import pandas as pd
-    import pytz
-    from datetime import datetime
+                try:
+                    import pandas as pd
+                    import pytz
+                    from datetime import datetime
 
-    now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
-    dfp['time'] = pd.to_datetime(dfp['time'], errors='coerce')
+                    now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
+                    dfp['time'] = pd.to_datetime(dfp['time'], errors='coerce')
 
-    if dfp['time'].min() <= now_local <= dfp['time'].max():
-        try:
-            # Primo tentativo: add_vline diretto
-            fig.add_vline(
-                x=pd.Timestamp(now_local),
-                line_width=2,
-                line_dash="dot",
-                line_color="red",
-                annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                annotation_position="top right"
-            )
-        except Exception:
-            # Fallback super-robusto: shape + annotation manuale
-            xval = pd.Timestamp(now_local)
-            fig.add_shape(
-                type="line",
-                x0=xval, x1=xval,
-                y0=0, y1=1,
-                xref="x", yref="paper",
-                line=dict(width=2, dash="dot", color="red")
-            )
-            fig.add_annotation(
-                x=xval, y=1, xref="x", yref="paper",
-                text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                showarrow=False, yshift=10
-            )
-except Exception as e:
-    st.warning(f"Errore linea oraria: {e}")
+                    if dfp['time'].min() <= now_local <= dfp['time'].max():
+                        try:
+                            # FIX linea oraria robusta
+                            fig.add_vline(
+                                x=pd.Timestamp(now_local),
+                                line_width=2,
+                                line_dash="dot",
+                                line_color="red",
+                                annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                                annotation_position="top right"
+                            )
+                        except Exception:
+                            # Fallback se add_vline fallisce
+                            xval = pd.Timestamp(now_local)
+                            fig.add_shape(
+                                type="line",
+                                x0=xval, x1=xval,
+                                y0=0, y1=1,
+                                xref="x", yref="paper",
+                                line=dict(width=2, dash="dot", color="red")
+                            )
+                            fig.add_annotation(
+                                x=xval, y=1, xref="x", yref="paper",
+                                text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                                showarrow=False, yshift=10
+                            )
+                except Exception as e:
+                    st.warning(f"Errore linea oraria: {e}")
 
                 # --- Layout e risultati ---
                 fig.update_layout(
