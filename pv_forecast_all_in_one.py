@@ -719,6 +719,35 @@ with tab3:
                     key=f"download_{label.lower()}",
                     use_container_width=True
                 )
+                # --- Pulsante per salvare la previsione di DOMANI ---
+                st.markdown("---")
+                st.subheader("💾 Salvataggio previsione di DOMANI")
+
+                if st.button("📦 Salva previsione di DOMANI in CSV", use_container_width=True):
+                   try:
+                       # Calcola di nuovo la previsione solo per DOMANI
+                       df_domani, energy_d, peak_d, _, _, provider_d, status_d, url_d = forecast_for_day(
+                            lat=st.session_state['lat'],
+                            lon=st.session_state['lon'],
+                            offset_days=1,
+                            label="Domani",
+                            model=load_model(),
+                            tilt=st.session_state['tilt'],
+                            orient=st.session_state['orient'],
+                            provider_pref=st.session_state['provider_pref'],
+                            plant_kw=st.session_state['plant_kw']
+                      )
+
+                     # Salvataggio CSV
+                      cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve'] if c in df_domani.columns]
+                      base_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
+                      df_domani[cols].to_csv(base_path, index=False)
+                      
+                      st.success(f"✅ Previsione DOMANI salvata con successo in: `{base_path}`")
+                      st.caption(f"Provider: {provider_d} | Energia stimata: {energy_d:.1f} kWh | Picco: {peak_d:.1f} kW")
+
+                    except Exception as e:
+                      st.error(f"❌ Errore durante il salvataggio: {e}")
 
 # ============================================================
 # ⚙️ Metodo fisico semplificato
