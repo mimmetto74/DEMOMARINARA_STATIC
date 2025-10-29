@@ -868,25 +868,25 @@ with tab4:
 
                 # --- Metriche ---
                 from sklearn.metrics import mean_absolute_error, r2_score
-                    mae = mean_absolute_error(df_merge["Reale_kW"], df_merge["Previsto_kW"])
-                    mape = np.mean(np.abs((df_merge["Reale_kW"] - df_merge["Previsto_kW"]) / np.maximum(df_merge["Reale_kW"], 1e-3))) * 100
-                    r2 = r2_score(df_merge["Reale_kW"], df_merge["Previsto_kW"])
+                mae = mean_absolute_error(df_merge["Reale_kW"], df_merge["Previsto_kW"])
+                mape = np.mean(np.abs((df_merge["Reale_kW"] - df_merge["Previsto_kW"]) / np.maximum(df_merge["Reale_kW"], 1e-3))) * 100
+                r2 = r2_score(df_merge["Reale_kW"], df_merge["Previsto_kW"])
 
-                    st.success(f"✅ Accuratezza previsione:")
-                    st.write(f"• **MAE:** {mae:.3f} kW")
-                    st.write(f"• **MAPE:** {mape:.2f}%")
-                    st.write(f"• **R²:** {r2:.3f}")
+                st.success(f"✅ Accuratezza previsione:")
+                st.write(f"• **MAE:** {mae:.3f} kW")
+                st.write(f"• **MAPE:** {mape:.2f}%")
+                st.write(f"• **R²:** {r2:.3f}")
 
-                    # --- Grafico comparativo ---
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(y=df_merge["Reale_kW"], mode="lines", name="Reale (Teseo)", line=dict(color="blue")))
-                    fig.add_trace(go.Scatter(y=df_merge["Previsto_kW"], mode="lines", name="Previsto (Modello ML)", line=dict(color="orange")))
-                    fig.update_layout(
-                        title="📊 Confronto Reale (Teseo) vs Previsto (Modello)",
-                        xaxis_title="Indice temporale (punti 15-min)",
-                        yaxis_title="Potenza (kW)",
-                        template="plotly_white",
-                        height=450
+                # --- Grafico comparativo ---
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(y=df_merge["Reale_kW"], mode="lines", name="Reale (Teseo)", line=dict(color="blue")))
+                fig.add_trace(go.Scatter(y=df_merge["Previsto_kW"], mode="lines", name="Previsto (Modello ML)", line=dict(color="orange")))
+                fig.update_layout(
+                    title="📊 Confronto Reale (Teseo) vs Previsto (Modello)",
+                    xaxis_title="Indice temporale (punti 15-min)",
+                    yaxis_title="Potenza (kW)",
+                    template="plotly_white",
+                    height=450
                 )    
                 st.plotly_chart(fig, use_container_width=True)
 
