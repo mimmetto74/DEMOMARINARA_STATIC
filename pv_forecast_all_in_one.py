@@ -273,9 +273,10 @@ def compute_curve_and_daily(df, model, plant_kw):
 
     # --- Resample centrato ---
     df = (df.set_index('time')
-            .resample('15min', label='center', closed='center')
-            .mean(numeric_only=True)
-            .reset_index())
+        .resample('15min')
+        .mean(numeric_only=True)
+        .reset_index())
+
 
     # --- Predizione modello o fallback ---
     if model is not None:
