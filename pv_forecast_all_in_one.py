@@ -680,21 +680,23 @@ with tab3:
                 except Exception as e:
                     st.warning(f"Errore calcolo picchi: {e}")
 
-               # --- Linea ora attuale ---
+                # --- Linea ora attuale (fix completo compatibilità Pandas 2.2) ---
                 try:
                     import pytz
                     now_local = datetime.now(pytz.timezone("Europe/Rome")).replace(tzinfo=None)
-                    if dfp['time'].min() <= now_local <= dfp['time'].max():
+
+                    # Mostra solo per 'Oggi'
+                    if label == "Oggi" and dfp['time'].min() <= now_local <= dfp['time'].max():
                         fig.add_vline(
-                        x=now_local,
-                        line_width=2,
-                        line_dash="dot",
-                        line_color="red",
-                        annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
-                        annotation_position="top right"
-                    )
+                            x=pd.Timestamp(now_local).to_numpy().astype('datetime64[ms]').astype(float),
+                            line_width=2,
+                            line_dash="dot",
+                            line_color="red",
+                            annotation_text=f"🕒 Ora attuale {now_local.strftime('%H:%M')}",
+                            annotation_position="top right"
+                        )
                 except Exception as e:
-                    st.warning(f"Errore linea oraria: {e}")
+                    st.warning(f"⚠️ Errore linea oraria: {e}")
 
                 # --- Layout e risultati ---
                 fig.update_layout(
