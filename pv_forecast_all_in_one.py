@@ -151,31 +151,53 @@ df['provider'] = 'Meteomatics'
 return '', df
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_openmeteo_hourly(lat, lon, start_date, end_date):
-    base = 'https://api.open-meteo.com/v1/forecast'
-    params = (f'?latitude={lat}&longitude={lon}&hourly=direct_radiation,cloudcover,temperature_2m'
-              f'&start_date={start_date}&end_date={end_date}&timezone=UTC')
-    url = base + params
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    j = r.json()
-    h = j.get('hourly', {})
-    times = pd.to_datetime(h.get('time', []))
-    if len(times) == 0:
-        return '', pd.DataFrame()
-# --- Correzione timezone automatica per dati meteo ---
-df_meteo = fix_timezone(df_meteo, column='datetime')
-    df = pd.DataFrame({'time': times})
-# --- Correzione timezone automatica per dati meteo ---
-df_meteo = fix_timezone(df_meteo, column='datetime')
-    if 'direct_radiation' in h: df['GlobalRad_W'] = pd.Series(h['direct_radiation']).astype(float)
-    if 'cloudcover' in h: df['CloudCover_P'] = pd.Series(h['cloudcover']).astype(float)
-    if 'temperature_2m' in h: df['Temp_Air'] = pd.Series(h['temperature_2m']).astype(float)
-    for c in ['GlobalRad_W','CloudCover_P','Temp_Air']:
-        if c not in df.columns: df[c] = np.nan
-    df = df.set_index('time').resample('15min').interpolate().reset_index()
-    df['provider'] = 'Open-Meteo'
-    return '', df
+def fetch_meteomatics(lat: float, lon: float, start_date: datetime, end_date: datetime):
+    """
+    Recupera dati meteo da Meteomatics e li restituisce come DataFrame.
+    """
+    import requests
+
+    try:
+        url = f"https://api.meteomatics.com/{start_date:%Y-%m-%dT%H:%M:%SZ}--{end_date:%Y-%m-%dT%H:%M:%SZ}:PT1H/global_rad:W,total_cloud_cover:p,t_2m:C/{lat},{lon}/json"
+        auth = (MM_USER, MM_PASS)
+        r = requests.get(url, auth=auth, timeout=30)
+        r.raise_for_status()
+        j = r.json()
+    except Exception as e:
+        raise RuntimeError(f"Errore rete Meteomatics: {e}") from e
+
+    # --- Parsing JSON ---
+    rows = []
+    for blk in j.get("data", []):
+        prm = blk.get("parameter")
+        col = "GlobaRad_W"
+        if prm == "total_cloud_cover:p":
+            col = "CloudCover_P"
+        elif prm == "t_2m:C":
+            col = "Temp_Air"
+
+        for d in blk.get("coordinates", [{}])[0].get("dates", []):
+            rows.append({"time": d.get("date"), col: d.get("value")})
+
+    # --- Creazione DataFrame ---
+    df = pd.DataFrame(rows)
+
+    # --- Correzione timezone automatica ---
+    df = fix_timezone(df, column="time")
+
+    if df.empty:
+        return "", df
+
+    # --- Pulizia e aggregazione ---
+    df["time"] = pd.to_datetime(df["time"])
+    df = df.groupby("time", as_index=False).mean().sort_values("time")
+
+    for c in ["GlobaRad_W", "CloudCover_P", "Temp_Air"]:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    df["provider"] = "Meteomatics"
+    return "", df
 
 # -------------------------- Forecasting core --------------------------------
 def compute_curve_and_daily(df, model, plant_kw):
