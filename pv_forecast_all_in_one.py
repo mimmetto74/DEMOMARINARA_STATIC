@@ -52,7 +52,7 @@ if not st.session_state.get('authenticated', False):
 
 # ---------------------------- CONFIG ---------------------------- #
 DATA_PATH = os.environ.get('PV_DAILY_DATA', 'Dataset_Daily_EnergiaSeparata_2020_2025.csv')
-MODEL_PATH = os.environ.get('PV_MODEL_PATH', 'models/rf_model_pv_2020_2025.joblib')
+MODEL_PATH = os.environ.get('PV_MODEL_PATH', 'rf_model_pv_2020_2025.joblib')
 LOG_DIR = os.environ.get('PV_LOG_DIR', 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
