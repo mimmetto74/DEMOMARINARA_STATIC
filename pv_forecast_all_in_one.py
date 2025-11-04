@@ -664,7 +664,7 @@ with tab3:
                         dfp['cos_doy'] = np.cos(2 * np.pi * dfp['dayofyear'] / 365)
                         dfp['avg_temp'] = dfp['Temp_Air'].rolling(window=3, min_periods=1).mean()
                         dfp['cloud_trend'] = dfp['CloudCover_P'].diff().fillna(0)
-                    except Exception as e:
+                   except Exception as e:
                         st.warning(f"⚠️ Errore creazione feature avanzate: {e}")
 
                 # --- Applica metodo selezionato ---
