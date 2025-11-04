@@ -213,7 +213,7 @@ def compute_energy_for_today(model, lat, lon, tilt, orient, provider_pref, plant
     )
     return float(energy), dfp, provider, status, url
 
-# ----------------------- MODEL TRAINING ------------------------ #
+# ----------------------- MODEL TRAINING (IMPROVED) ------------------------ #
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -222,19 +222,39 @@ def train_model():
     df0 = load_data()
     if 'E_INT_Daily_KWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
         df0 = df0.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
-    for col in ['CloudCover_P','Temp_Air']:
-        if col not in df0.columns: df0[col] = np.nan
-    df = df0.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2']).copy()
-    X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
+
+    # --- Feature engineering migliorata ---
+    df = df0.dropna(subset=['E_INT_Daily_kWh', 'G_M0_Wm2']).copy()
+    df['month'] = df['Date'].dt.month
+    df['dayofyear'] = df['Date'].dt.dayofyear
+    df['sin_doy'] = np.sin(2 * np.pi * df['dayofyear'] / 365)
+    df['cos_doy'] = np.cos(2 * np.pi * df['dayofyear'] / 365)
+    df['Temp_Air'] = df.get('Temp_Air', pd.Series(0, index=df.index))
+    df['CloudCover_P'] = df.get('CloudCover_P', pd.Series(0, index=df.index))
+    df['avg_temp'] = df['Temp_Air'].rolling(window=3, min_periods=1).mean()
+    df['cloud_trend'] = df['CloudCover_P'].diff().fillna(0)
+
+    features = [
+        'G_M0_Wm2', 'CloudCover_P', 'Temp_Air',
+        'sin_doy', 'cos_doy', 'avg_temp', 'cloud_trend'
+    ]
+    X = df[features].fillna(df[features].mean())
     y = df['E_INT_Daily_kWh']
+
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
-    model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
+    model = RandomForestRegressor(
+        n_estimators=400, max_depth=14, random_state=42,
+        min_samples_leaf=3, n_jobs=-1
+    )
     model.fit(Xtr, ytr)
     pred = model.predict(Xte)
     mae = float(mean_absolute_error(yte, pred))
     r2 = float(r2_score(yte, pred))
-    joblib.dump({'model': model, 'features': X.columns.tolist()}, MODEL_PATH)
-    pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(LOG_DIR,'feature_importances.csv'))
+
+    # --- Salva modello e feature importance ---
+    joblib.dump({'model': model, 'features': features}, MODEL_PATH)
+    pd.Series(model.feature_importances_, index=features).sort_values(ascending=False)\
+        .to_csv(os.path.join(LOG_DIR, 'feature_importances.csv'))
     return mae, r2
 
 # ------------------- DAILY CURVE & FORECAST ------------------- #
