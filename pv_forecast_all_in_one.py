@@ -558,10 +558,24 @@ with tab2:
             if col not in dfm.columns:
                 dfm[col] = np.nan
         dfm = dfm.dropna(subset=['E_INT_Daily_kWh', 'G_M0_Wm2'])
-        Xp = dfm[['G_M0_Wm2', 'CloudCover_P', 'Temp_Air']].fillna(
-            dfm[['G_M0_Wm2', 'CloudCover_P', 'Temp_Air']].mean()
-        )
+
+        # --- Ricrea le feature usate nel modello ---
+        dfm['month'] = dfm['Date'].dt.month
+        dfm['dayofyear'] = dfm['Date'].dt.dayofyear
+        dfm['sin_doy'] = np.sin(2 * np.pi * dfm['dayofyear'] / 365)
+        dfm['cos_doy'] = np.cos(2 * np.pi * dfm['dayofyear'] / 365)
+        dfm['avg_temp'] = dfm['Temp_Air'].rolling(window=3, min_periods=1).mean()
+        dfm['cloud_trend'] = dfm['CloudCover_P'].diff().fillna(0)
+
+        # --- Usa le stesse feature del modello addestrato ---
+        features = getattr(model, "feature_names_in_", [
+             'G_M0_Wm2', 'CloudCover_P', 'Temp_Air',
+             'sin_doy', 'cos_doy', 'avg_temp', 'cloud_trend'
+        ])
+        Xp = dfm.reindex(columns=features, fill_value=0)
+
         dfm['Predetto'] = model.predict(Xp)
+
 
         # Grafico Reale vs Predetto
         import plotly.graph_objects as go
