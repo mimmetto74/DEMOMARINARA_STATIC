@@ -600,7 +600,6 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
 # ---- TAB 3: Previsioni (4 giorni) ---- #
-# ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('🔮 Previsioni 4 giorni (15 min)')
 
@@ -656,6 +655,17 @@ with tab3:
                 if dfp['time'].dt.tz is None:
                     dfp['time'] = dfp['time'].dt.tz_localize(pytz.UTC)
                 dfp['time'] = dfp['time'].dt.tz_convert("Europe/Rome").dt.tz_localize(None)
+                # --- Prepara le nuove feature per il modello ML ---
+                if model is not None and _method == "Random Forest":
+                   try:
+                        dfp['month'] = dfp['time'].dt.month
+                        dfp['dayofyear'] = dfp['time'].dt.dayofyear
+                        dfp['sin_doy'] = np.sin(2 * np.pi * dfp['dayofyear'] / 365)
+                        dfp['cos_doy'] = np.cos(2 * np.pi * dfp['dayofyear'] / 365)
+                        dfp['avg_temp'] = dfp['Temp_Air'].rolling(window=3, min_periods=1).mean()
+                        dfp['cloud_trend'] = dfp['CloudCover_P'].diff().fillna(0)
+                    except Exception as e:
+                        st.warning(f"⚠️ Errore creazione feature avanzate: {e}")
 
                 # --- Applica metodo selezionato ---
                 if _method == "Fisico semplificato":
