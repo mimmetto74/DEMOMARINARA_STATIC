@@ -292,43 +292,39 @@ def compute_curve_and_daily(df, model, plant_kw):
     # --- Resample ogni 15 minuti (preserva media delle numeriche) ---
     df = df.set_index('time').resample('15T').mean(numeric_only=True).reset_index()
 
-    # --- Predizione modello se disponibile ---
+        # --- Predizione modello basata su comportamento storico ---
     if model is not None:
-        model_features = getattr(model, "feature_names_in_", [])
-        X = pd.DataFrame()
-
-        # Mappa automatica dei nomi delle feature
-        col_map = {
-            'G_M0_Wm2': 'GlobalRad_W',
-            'GlobalRad_W': 'G_M0_Wm2'
-        }
-
-        for feat in model_features:
-            if feat in df.columns:
-                X[feat] = df[feat]
-            elif feat in col_map and col_map[feat] in df.columns:
-                X[feat] = df[col_map[feat]]
-            else:
-                X[feat] = 0.0
-
         try:
-            df['kWh_curve'] = model.predict(X)
-        except ValueError as e:
-            st.warning(f"⚠️ Mismatch colonne modello: {e}. Riprovo adattando i nomi.")
-            cols = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else X.columns
-            X = X.reindex(columns=cols, fill_value=0)
-            df['kWh_curve'] = model.predict(X)
+            # Dataset giornaliero medio per stimare energia attesa
+            rad_mean = df['GlobalRad_W'].mean()
+            cloud_mean = df['CloudCover_P'].mean() if 'CloudCover_P' in df.columns else 50
+            temp_mean = df['Temp_Air'].mean() if 'Temp_Air' in df.columns else 20
 
-        # Normalizza rispetto alla potenza impianto
-        if df['kWh_curve'].max() > 0:
-            df['kWh_curve'] = (
-                df['kWh_curve'] / df['kWh_curve'].max()
-            ) * plant_kw
-    else:
-        # --- Fallback proporzionale all'irradianza ---
-        ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'rad_corr'
-        max_val = max(df[ref_col].max(), 1)
-        df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max_val
+            X_day = pd.DataFrame([{
+                'G_M0_Wm2': rad_mean,
+                'CloudCover_P': cloud_mean,
+                'Temp_Air': temp_mean
+            }])
+
+            # 🔹 Predizione energia giornaliera stimata dal modello ML
+            energy_pred_ml = float(model.predict(X_day)[0])
+
+            # 🔹 Rimodula curva oraria secondo il profilo Meteomatics
+            rad_profile = df['GlobalRad_W'].clip(lower=0)
+            rad_profile = rad_profile / rad_profile.sum()
+            df['kWh_curve'] = rad_profile * energy_pred_ml
+
+            # 🔹 Normalizza alla potenza nominale impianto
+            max_kW = df['kWh_curve'].max()
+            if max_kW > 0:
+                df['kWh_curve'] = (df['kWh_curve'] / max_kW) * plant_kw
+
+        except Exception as e:
+            st.warning(f"⚠️ Errore nella previsione ML dinamica: {e}")
+            # fallback proporzionale
+            ref_col = 'GlobalRad_W' if 'GlobalRad_W' in df.columns else 'rad_corr'
+            df['kWh_curve'] = df[ref_col] * (plant_kw / 1000.0) / max(df[ref_col].max(), 1)
+
 
     # --- Smussamento centrato (no shift temporale) ---
     df['kWh_curve'] = df['kWh_curve'].rolling(window=3, center=True, min_periods=1).mean()
@@ -565,7 +561,6 @@ with tab2:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-# ---- TAB 3: Previsioni (4 giorni) ---- #
 # ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('🔮 Previsioni 4 giorni (15 min)')
