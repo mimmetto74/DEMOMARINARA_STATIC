@@ -52,7 +52,7 @@ if not st.session_state.get('authenticated', False):
 
 # ---------------------------- CONFIG ---------------------------- #
 DATA_PATH = os.environ.get('PV_DAILY_DATA', 'Dataset_Daily_EnergiaSeparata_2020_2025.csv')
-MODEL_PATH = os.environ.get('PV_MODEL_PATH', 'rf_model_pv_2020_2025.joblib')
+MODEL_PATH = os.environ.get('PV_MODEL_PATH', 'rf_model.joblib')
 LOG_DIR = os.environ.get('PV_LOG_DIR', 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -213,7 +213,7 @@ def compute_energy_for_today(model, lat, lon, tilt, orient, provider_pref, plant
     )
     return float(energy), dfp, provider, status, url
 
-# ----------------------- MODEL TRAINING (IMPROVED) ------------------------ #
+# ----------------------- MODEL TRAINING ------------------------ #
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -222,39 +222,19 @@ def train_model():
     df0 = load_data()
     if 'E_INT_Daily_KWh' in df0.columns and 'E_INT_Daily_kWh' not in df0.columns:
         df0 = df0.rename(columns={'E_INT_Daily_KWh':'E_INT_Daily_kWh'})
-
-    # --- Feature engineering migliorata ---
-    df = df0.dropna(subset=['E_INT_Daily_kWh', 'G_M0_Wm2']).copy()
-    df['month'] = df['Date'].dt.month
-    df['dayofyear'] = df['Date'].dt.dayofyear
-    df['sin_doy'] = np.sin(2 * np.pi * df['dayofyear'] / 365)
-    df['cos_doy'] = np.cos(2 * np.pi * df['dayofyear'] / 365)
-    df['Temp_Air'] = df.get('Temp_Air', pd.Series(0, index=df.index))
-    df['CloudCover_P'] = df.get('CloudCover_P', pd.Series(0, index=df.index))
-    df['avg_temp'] = df['Temp_Air'].rolling(window=3, min_periods=1).mean()
-    df['cloud_trend'] = df['CloudCover_P'].diff().fillna(0)
-
-    features = [
-        'G_M0_Wm2', 'CloudCover_P', 'Temp_Air',
-        'sin_doy', 'cos_doy', 'avg_temp', 'cloud_trend'
-    ]
-    X = df[features].fillna(df[features].mean())
+    for col in ['CloudCover_P','Temp_Air']:
+        if col not in df0.columns: df0[col] = np.nan
+    df = df0.dropna(subset=['E_INT_Daily_kWh','G_M0_Wm2']).copy()
+    X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
     y = df['E_INT_Daily_kWh']
-
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
-    model = RandomForestRegressor(
-        n_estimators=400, max_depth=14, random_state=42,
-        min_samples_leaf=3, n_jobs=-1
-    )
+    model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
     model.fit(Xtr, ytr)
     pred = model.predict(Xte)
     mae = float(mean_absolute_error(yte, pred))
     r2 = float(r2_score(yte, pred))
-
-    # --- Salva modello e feature importance ---
-    joblib.dump({'model': model, 'features': features}, MODEL_PATH)
-    pd.Series(model.feature_importances_, index=features).sort_values(ascending=False)\
-        .to_csv(os.path.join(LOG_DIR, 'feature_importances.csv'))
+    joblib.dump({'model': model, 'features': X.columns.tolist()}, MODEL_PATH)
+    pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False).to_csv(os.path.join(LOG_DIR,'feature_importances.csv'))
     return mae, r2
 
 # ------------------- DAILY CURVE & FORECAST ------------------- #
@@ -558,24 +538,10 @@ with tab2:
             if col not in dfm.columns:
                 dfm[col] = np.nan
         dfm = dfm.dropna(subset=['E_INT_Daily_kWh', 'G_M0_Wm2'])
-
-        # --- Ricrea le feature usate nel modello ---
-        dfm['month'] = dfm['Date'].dt.month
-        dfm['dayofyear'] = dfm['Date'].dt.dayofyear
-        dfm['sin_doy'] = np.sin(2 * np.pi * dfm['dayofyear'] / 365)
-        dfm['cos_doy'] = np.cos(2 * np.pi * dfm['dayofyear'] / 365)
-        dfm['avg_temp'] = dfm['Temp_Air'].rolling(window=3, min_periods=1).mean()
-        dfm['cloud_trend'] = dfm['CloudCover_P'].diff().fillna(0)
-
-        # --- Usa le stesse feature del modello addestrato ---
-        features = getattr(model, "feature_names_in_", [
-             'G_M0_Wm2', 'CloudCover_P', 'Temp_Air',
-             'sin_doy', 'cos_doy', 'avg_temp', 'cloud_trend'
-        ])
-        Xp = dfm.reindex(columns=features, fill_value=0)
-
+        Xp = dfm[['G_M0_Wm2', 'CloudCover_P', 'Temp_Air']].fillna(
+            dfm[['G_M0_Wm2', 'CloudCover_P', 'Temp_Air']].mean()
+        )
         dfm['Predetto'] = model.predict(Xp)
-
 
         # Grafico Reale vs Predetto
         import plotly.graph_objects as go
@@ -599,6 +565,7 @@ with tab2:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+# ---- TAB 3: Previsioni (4 giorni) ---- #
 # ---- TAB 3: Previsioni (4 giorni) ---- #
 with tab3:
     st.subheader('🔮 Previsioni 4 giorni (15 min)')
@@ -655,17 +622,6 @@ with tab3:
                 if dfp['time'].dt.tz is None:
                     dfp['time'] = dfp['time'].dt.tz_localize(pytz.UTC)
                 dfp['time'] = dfp['time'].dt.tz_convert("Europe/Rome").dt.tz_localize(None)
-                # --- Prepara le nuove feature per il modello ML ---
-                if model is not None and _method == "Random Forest":
-                   try:
-                        dfp['month'] = dfp['time'].dt.month
-                        dfp['dayofyear'] = dfp['time'].dt.dayofyear
-                        dfp['sin_doy'] = np.sin(2 * np.pi * dfp['dayofyear'] / 365)
-                        dfp['cos_doy'] = np.cos(2 * np.pi * dfp['dayofyear'] / 365)
-                        dfp['avg_temp'] = dfp['Temp_Air'].rolling(window=3, min_periods=1).mean()
-                        dfp['cloud_trend'] = dfp['CloudCover_P'].diff().fillna(0)
-                   except Exception as e:
-                        st.warning(f"⚠️ Errore creazione feature avanzate: {e}")
 
                 # --- Applica metodo selezionato ---
                 if _method == "Fisico semplificato":
@@ -773,38 +729,6 @@ with tab3:
                     key=f"download_{label.lower()}",
                     use_container_width=True
                 )
-                # --- Pulsante per salvare la previsione di DOMANI ---
-            st.markdown("---")
-            st.subheader("💾 Salvataggio previsione di DOMANI")
-
-            if st.button("📦 Salva previsione di DOMANI in CSV"):
-                try:
-                    model = load_model()
-                    df_domani, energy_d, peak_d, _, _, provider_d, status_d, url_d = forecast_for_day(
-                        lat=st.session_state['lat'],
-                        lon=st.session_state['lon'],
-                        offset_days=1,
-                        label='Domani',
-                        model=model,
-                        tilt=st.session_state['tilt'],
-                        orient=st.session_state['orient'],
-                        provider_pref=st.session_state['provider_pref'],
-                        plant_kw=st.session_state['plant_kw'],
-                        autosave=True
-                    )
-
-                    if df_domani is not None and not df_domani.empty:
-                        base_path = os.path.join(LOG_DIR, "forecast_domani_base.csv")
-                        cols = [c for c in ['time', 'GlobalRad_W', 'CloudCover_P', 'Temp_Air', 'rad_corr', 'kWh_curve']
-                                if c in df_domani.columns]
-                        df_domani[cols].to_csv(base_path, index=False)
-                        st.session_state["last_forecast_path"] = base_path
-                        st.success(f"✅ Previsione DOMANI salvata in: `{base_path}`")
-                    else:
-                        st.warning("⚠️ Nessun dato disponibile per DOMANI, impossibile salvare.")
-
-                except Exception as e:
-                    st.error(f"❌ Errore durante il salvataggio della previsione DOMANI: {e}")
 
 # ============================================================
 # ⚙️ Metodo fisico semplificato
