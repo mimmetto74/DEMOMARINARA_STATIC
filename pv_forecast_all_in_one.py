@@ -291,6 +291,14 @@ def compute_curve_and_daily(df, model, plant_kw):
 
     # --- Resample ogni 15 minuti (preserva media delle numeriche) ---
     df = df.set_index('time').resample('15T').mean(numeric_only=True).reset_index()
+     # --- Limita al solo giorno richiesto (00:00–23:59 locali) ---
+    try:
+        start_day = df['time'].min().normalize()
+        end_day = start_day + pd.Timedelta(days=1)
+        df = df[(df['time'] >= start_day) & (df['time'] < end_day)]
+    except Exception as e:
+        st.warning(f"⚠️ Errore nel filtro per giorno singolo: {e}")
+
 
         # --- Predizione modello basata su comportamento storico ---
     if model is not None:
