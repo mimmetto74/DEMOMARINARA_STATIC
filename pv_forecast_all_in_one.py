@@ -214,7 +214,7 @@ def compute_energy_for_today(model, lat, lon, tilt, orient, provider_pref, plant
     return float(energy), dfp, provider, status, url
 
 # ----------------------- MODEL TRAINING ------------------------ #
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor as PVModel
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
@@ -228,7 +228,7 @@ def train_model():
     X = df[['G_M0_Wm2','CloudCover_P','Temp_Air']].fillna(df[['G_M0_Wm2','CloudCover_P','Temp_Air']].mean())
     y = df['E_INT_Daily_kWh']
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
-    model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
+    model = PVModel(n_estimators=300, max_depth=10, random_state=42)
     model.fit(Xtr, ytr)
     pred = model.predict(Xte)
     mae = float(mean_absolute_error(yte, pred))
@@ -473,7 +473,8 @@ for k,v in {'lat':DEFAULT_LAT,'lon':DEFAULT_LON,'tilt':DEFAULT_TILT,'orient':DEF
 tab1, tab2, tab3, tab4, tab5 = st.tabs(['📊 Storico','🧠 Modello','🔮 Previsioni 4 giorni (15 min)','🗺️ Mappa','🛡️ Validazione previsione DOMANI'])
 
 # ---- Selezione metodo previsione ----
-_method = st.selectbox("Metodo di previsione", ["Random Forest", "Fisico semplificato", "Ibrido ML + Fisico"], index=0, key="method_select_tab3")
+_method = st.selectbox("Metodo di previsione", ["Modello Storico", "Fisico semplificato", "Ibrido ML + Fisico"], index=0, key="method_select_tab3")
+
 
 # ---- TAB 1: Storico ---- #
 with tab1:
@@ -530,7 +531,8 @@ with tab2:
         mae, r2 = train_model()
         st.session_state['last_mae'] = mae
         st.session_state['last_r2'] = r2
-        st.success(f'✅ Modello addestrato!  MAE: {mae:.2f} | R²: {r2:.3f}')
+        st.success(f'✅ Sistema di previsione aggiornato!  MAE: {mae:.2f} | R²: {r2:.3f}')
+
 
     # --- Visualizzazione risultati modello ---
     if os.path.exists(MODEL_PATH):
@@ -627,7 +629,7 @@ with tab3:
                 dfp['time'] = dfp['time'].dt.tz_convert("Europe/Rome").dt.tz_localize(None)
 
                 # --- Applica metodo selezionato ---
-                if _method == "Fisico semplificato":
+                if _method == "Modello Storico":
                     dfp, energy, peak_kW, peak_pct, cloud_mean = forecast_physical(dfp, st.session_state['plant_kw'])
                 elif _method == "Ibrido ML + Fisico":
                     dfp, energy, peak_kW, peak_pct, cloud_mean = forecast_hybrid(dfp, model, st.session_state['plant_kw'])
